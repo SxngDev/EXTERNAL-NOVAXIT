@@ -21,7 +21,7 @@
     <key>NOVA_API_BASE_URL</key>
     <string>$(NOVA_API_BASE_URL)</string>
     <key>CFBundleVersion</key>
-    <string>51</string>
+    <string>52</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
