@@ -1,0 +1,69 @@
+name: Build NOVA IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install API test dependencies
+        run: |
+          python3 -m venv .venv-api-tests
+          .venv-api-tests/bin/python -m pip install -r nova-api/requirements.txt
+      - name: Test NOVA API
+        run: .venv-api-tests/bin/python -m unittest discover -s nova-api -v
+      - name: Check embedded localizations
+        run: python3 generate_embedded_localizations.py --check
+
+  build-ipa:
+    if: ${{ vars.NOVA_API_BASE_URL != '' }}
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Build unsigned NOVA IPA
+        run: |
+          chmod +x build_unsigned.sh build_esign_ready_ipa.sh
+          ./build_unsigned.sh
+        env:
+          NOVA_API_BASE_URL: ${{ vars.NOVA_API_BASE_URL }}
+      - name: Verify app identity and NOVA URL
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/nova-ipa-check"
+          mkdir -p "$RUNNER_TEMP/nova-ipa-check"
+          unzip -q build/NOVA-Build-49-unsigned.ipa -d "$RUNNER_TEMP/nova-ipa-check"
+          APP_DIR="$(find "$RUNNER_TEMP/nova-ipa-check/Payload" -maxdepth 1 -name '*.app' -type d -print -quit)"
+          test "$(basename "$APP_DIR")" = "NOVA.app"
+          test -f "$APP_DIR/SAK"
+          python3 - "$APP_DIR/Info.plist" "$NOVA_API_BASE_URL" <<'PY'
+          import plistlib, sys
+          with open(sys.argv[1], 'rb') as f:
+              info = plistlib.load(f)
+          assert info['CFBundleDisplayName'] == 'NOVA'
+          assert info['NOVA_API_BASE_URL'] == sys.argv[2]
+          assert info['CFBundleExecutable'] == 'SAK'
+          PY
+          python3 embed_app_resources.py --verify "$APP_DIR"
+        env:
+          NOVA_API_BASE_URL: ${{ vars.NOVA_API_BASE_URL }}
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-Build-49-unsigned-IPA
+          path: build/NOVA-Build-49-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
