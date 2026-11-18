@@ -4,7 +4,7 @@ Proyecto iOS original con la misma funcionalidad de catálogo, parches y activac
 
 ## API NOVA
 
-El backend está en [`nova-api/`](nova-api/README.md). Usa Flask y SQLite; el panel web privado permite emitir hasta 100 claves por lote, elegir vigencia (0 = permanente), limitar dispositivos y revocar claves. Las claves se muestran solo al generarlas; la base guarda únicamente su SHA-256. Por defecto una licencia queda enlazada al primer dispositivo que la active.
+`nova-api/` es una implementación opcional Flask/SQLite para despliegue propio. La IPA de la rama principal usa ahora la NOVA Key Console alojada en `https://novakey-8h6koiim.manus.space/` y su API en `https://novakey-8h6koiim.manus.space/api`. Sus almacenes son independientes: genera las claves destinadas a esta compilación en la consola alojada, no en el backend opcional.
 
 Para desarrollo local:
 
@@ -25,13 +25,13 @@ Rutas principales: `POST /api/license/verify` valida una clave y devuelve la ses
 
 ## Conectar la IPA
 
-La app recibe la URL base de API al compilar mediante `NOVA_API_BASE_URL`, con formato `https://tu-dominio/api`. El valor de ejemplo `https://api.nova.example/api` no es un servidor real; sustituye el dominio después de desplegar el backend. En GitHub Actions, configura la variable de repositorio `NOVA_API_BASE_URL`; para una compilación local:
+GitHub Actions configura `NOVA_API_BASE_URL` en `.github/workflows/build.yml` con la dirección base pública actual `https://novakey-8h6koiim.manus.space/api`. La URL no es un secreto. Si cambia el dominio alojado, actualiza ese valor en el workflow. Para compilar localmente, puedes pasar la misma variable:
 
 ```bash
-NOVA_API_BASE_URL=https://api.tu-dominio.com/api ./build_unsigned.sh
+NOVA_API_BASE_URL=https://novakey-8h6koiim.manus.space/api ./build_unsigned.sh
 ```
 
-La compilación de IPA requiere macOS y Xcode. El archivo resultante se llamará `build/NOVA-Build-49-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual. Este entorno Linux no puede producir el IPA final de Xcode.
+La compilación de IPA requiere macOS y Xcode. El artefacto de GitHub Actions se llamará `NOVA-Build-49-unsigned-IPA` y contendrá `NOVA-Build-49-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
 
 ## Pruebas
 

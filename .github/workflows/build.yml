@@ -26,9 +26,10 @@ jobs:
         run: python3 generate_embedded_localizations.py --check
 
   build-ipa:
-    if: ${{ vars.NOVA_API_BASE_URL != '' }}
     needs: test
     runs-on: macos-latest
+    env:
+      NOVA_API_BASE_URL: "https://novakey-8h6koiim.manus.space/api"
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -38,8 +39,6 @@ jobs:
         run: |
           chmod +x build_unsigned.sh build_esign_ready_ipa.sh
           ./build_unsigned.sh
-        env:
-          NOVA_API_BASE_URL: ${{ vars.NOVA_API_BASE_URL }}
       - name: Verify app identity and NOVA URL
         run: |
           set -euo pipefail
@@ -58,8 +57,6 @@ jobs:
           assert info['CFBundleExecutable'] == 'SAK'
           PY
           python3 embed_app_resources.py --verify "$APP_DIR"
-        env:
-          NOVA_API_BASE_URL: ${{ vars.NOVA_API_BASE_URL }}
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
