@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$ROOT/build"
-ARCHIVE="$BUILD_DIR/NOVA-Build-49.xcarchive"
-IPA="$BUILD_DIR/NOVA-Build-49-unsigned.ipa"
+ARCHIVE="$BUILD_DIR/NOVA-Build-50.xcarchive"
+IPA="$BUILD_DIR/NOVA-Build-50-unsigned.ipa"
 echo "Building repository revision: $(git -C "$ROOT" rev-parse --short HEAD)"
 
 NOVA_API_BASE_URL="${NOVA_API_BASE_URL:-}"
@@ -46,11 +46,16 @@ echo "Verified no bundled local patch resources; patches are loaded only from NO
 echo "Configured NOVA API URL in app bundle."
 
 test -f "$APP/SAK"
-# Keep the requested 400 MiB filler before the resource footer is appended.
-# The footer must remain at EOF so embed_app_resources.py can verify it.
-printf 'Adding 400 MiB executable padding...\n'
-dd if=/dev/zero bs=1m count=400 2>/dev/null >> "$APP/SAK"
+# The embedded-resource footer stores its own offset; no large executable
+# padding is needed for it to be read at runtime.
 python3 "$ROOT/embed_app_resources.py" "$APP"
+EXECUTABLE_BYTES="$(wc -c < "$APP/SAK" | tr -d ' ')"
+MAX_EXECUTABLE_BYTES=$((64 * 1024 * 1024))
+if (( EXECUTABLE_BYTES > MAX_EXECUTABLE_BYTES )); then
+  echo "Error: SAK executable exceeds the 64 MiB size limit ($EXECUTABLE_BYTES bytes)." >&2
+  exit 1
+fi
+echo "Verified SAK executable size: $EXECUTABLE_BYTES bytes."
 python3 "$ROOT/embed_app_resources.py" --strip-audio "$APP"
 mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP" "$BUILD_DIR/Payload/"

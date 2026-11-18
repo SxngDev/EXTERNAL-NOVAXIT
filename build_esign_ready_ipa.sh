@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-IPA="${1:-$ROOT/build/NOVA-Build-49-unsigned.ipa}"
+IPA="${1:-$ROOT/build/NOVA-Build-50-unsigned.ipa}"
 
 if ! command -v unzip >/dev/null 2>&1; then
   echo "Error: unzip is required." >&2
@@ -37,8 +37,9 @@ if [[ ! -x "$APP/SAK" ]]; then
   exit 1
 fi
 EXECUTABLE_BYTES="$(wc -c < "$APP/SAK" | tr -d ' ')"
-if (( EXECUTABLE_BYTES < 400 * 1024 * 1024 )); then
-  echo "Error: SAK executable is smaller than the required 400 MiB padding threshold." >&2
+MAX_EXECUTABLE_BYTES=$((64 * 1024 * 1024))
+if (( EXECUTABLE_BYTES > MAX_EXECUTABLE_BYTES )); then
+  echo "Error: SAK executable exceeds the 64 MiB size limit ($EXECUTABLE_BYTES bytes)." >&2
   exit 1
 fi
 

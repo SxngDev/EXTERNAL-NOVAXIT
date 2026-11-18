@@ -31,7 +31,7 @@ GitHub Actions configura `NOVA_API_BASE_URL` en `.github/workflows/build.yml` co
 NOVA_API_BASE_URL=https://novakey-8h6koiim.manus.space/api ./build_unsigned.sh
 ```
 
-La compilación de IPA requiere macOS y Xcode. El artefacto de GitHub Actions se llamará `NOVA-Build-49-unsigned-IPA` y contendrá `NOVA-Build-49-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
+La compilación de IPA requiere macOS y Xcode. El artefacto de GitHub Actions se llamará `NOVA-Build-50-unsigned-IPA` y contendrá `NOVA-Build-50-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
 
 ## Pruebas
 
