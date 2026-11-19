@@ -419,7 +419,7 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
 
     private func managedDirectory(createIfNeeded: Bool) throws -> URL {
         guard let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw URLError(.fileURLUnavailable)
+            throw URLError(.resourceUnavailable)
         }
         let root = applicationSupport.standardizedFileURL
         let directory = root.appendingPathComponent(managedDirectoryName, isDirectory: true).standardizedFileURL
