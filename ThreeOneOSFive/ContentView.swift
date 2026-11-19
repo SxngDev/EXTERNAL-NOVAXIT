@@ -816,7 +816,7 @@ struct ContentView: View {
                         .foregroundStyle(AppTheme.secondaryAccent)
                         .padding(.vertical, 10)
                 } else if patchStore.hasCompletedInitialSync {
-                    Text("NO \(category.uppercased()) PATCHES — ADD FILES FROM NOVA")
+                    Text(appLanguage.text("nova.files.no_options", category.uppercased()))
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
                         .padding(.vertical, 10)

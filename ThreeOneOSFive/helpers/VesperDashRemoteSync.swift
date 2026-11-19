@@ -511,28 +511,41 @@ struct NOVAReceivedDocumentsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(AppTheme.accent)
-                VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(LinearGradient(
+                            colors: [AppTheme.accent, AppTheme.secondaryAccent],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 26, weight: .black))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 62, height: 62)
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.24), lineWidth: 1))
+                .shadow(color: AppTheme.accent.opacity(0.32), radius: 10, x: 0, y: 4)
+
+                VStack(alignment: .leading, spacing: 5) {
                     Text(appLanguage.text("nova.files.title"))
-                        .font(.system(size: 13, weight: .black, design: .rounded))
+                        .font(.system(size: 21, weight: .black, design: .rounded))
                         .foregroundStyle(AppTheme.paper)
                     Text(appLanguage.text("nova.files.subtitle"))
-                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                        .tracking(1.1)
                         .foregroundStyle(AppTheme.paper.opacity(0.55))
                 }
-                Spacer(minLength: 4)
+                Spacer(minLength: 2)
                 Button(action: syncNow) {
-                    Label(appLanguage.text(store.isSyncing ? "nova.files.syncing" : "nova.files.sync"), systemImage: "arrow.clockwise")
-                        .font(.system(size: 8, weight: .black, design: .rounded))
+                    Image(systemName: store.isSyncing ? "hourglass" : "arrow.clockwise")
+                        .font(.system(size: 15, weight: .black))
                         .foregroundStyle(AppTheme.ink)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 7)
-                        .background(AppTheme.accent, in: Capsule())
+                        .frame(width: 42, height: 42)
+                        .background(AppTheme.accent, in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(Text(appLanguage.text(store.isSyncing ? "nova.files.syncing" : "nova.files.sync")))
                 .disabled(store.isSyncing || !licenseManager.isActive)
             }
 

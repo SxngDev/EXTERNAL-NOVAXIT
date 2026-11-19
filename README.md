@@ -31,7 +31,7 @@ GitHub Actions configura `NOVA_API_BASE_URL` en `.github/workflows/build.yml` co
 NOVA_API_BASE_URL=https://novakey-8h6koiim.manus.space/api ./build_unsigned.sh
 ```
 
-Build 56 parte de Build 55 (a su vez basada en el source estable de Build 52). Los adjuntos pasivos Disponibles aparecen dentro de AIM con una marca «Recién subido» durante siete días; los de Mantenimiento se retiran después de una sincronización correcta. El switch de cada fila solo la muestra u oculta en la lista local: no ejecuta ni aplica el archivo. La sincronización manual no se dispara al iniciar la app; al refrescar comienza una consulta cada 60 segundos mientras AIM permanece activa. El artefacto de GitHub Actions se llamará `NOVA-Build-56-unsigned-IPA` y contendrá `NOVA-Build-56-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
+Build 57 parte de Build 56, que conserva la base estable de Build 52. El contenido aparece como una tarjeta NOVA de gran formato dentro de AIM, sin una pantalla separada llamada «Archivos», con una marca «Recién subido» durante siete días. El switch por fila solo muestra u oculta el elemento en la lista local; no ejecuta ni aplica contenido. La sincronización manual no se dispara al iniciar la app; al actualizar comienza una consulta cada 60 segundos mientras AIM permanece activa. El artefacto de GitHub Actions se llamará `NOVA-Build-57-unsigned-IPA` y contendrá `NOVA-Build-57-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
 
 ## Pruebas
 
