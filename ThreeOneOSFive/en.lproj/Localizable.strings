@@ -539,3 +539,15 @@
 "settings.more_detail" = "Color, language and support";
 "settings.rainbow" = "Rainbow RGB";
 "settings.rainbow_active" = "Rainbow colors are active";
+"nova.files.title" = "FILES";
+"nova.files.subtitle" = "PASSIVE FILES RECEIVED FROM NOVA";
+"nova.files.sync" = "SYNC NOW";
+"nova.files.syncing" = "SYNCING…";
+"nova.files.last_sync" = "LAST SYNC %@";
+"nova.files.none" = "NO AVAILABLE FILES";
+"nova.files.none_detail" = "Files marked Available on the NOVA web console are saved here.";
+"nova.files.saved" = "SAVED IN NOVA";
+"nova.files.maintenance_note" = "Files marked Maintenance are removed after the next successful sync.";
+"nova.files.sync_failed" = "SYNC FAILED";
+"nova.files.auth_required" = "Activate NOVA to synchronize files.";
+"nova.files.updated" = "FILES UPDATED";

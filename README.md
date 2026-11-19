@@ -23,6 +23,8 @@ Abre `http://127.0.0.1:5000` para entrar al panel. Antes de exponerlo a Internet
 
 Rutas principales: `POST /api/license/verify` valida una clave y devuelve la sesión temporal de cliente; `POST /api/admin/licenses` (sesión de administrador) genera claves; `GET /api/admin/licenses` lista metadatos no secretos; `POST /api/admin/licenses/revoke` revoca una clave. El backend conserva las rutas autenticadas de catálogo y descarga que usa la app.
 
+La consola NOVA también ofrece una biblioteca web de adjuntos. La app usa `GET /api/client/documents` y `GET /api/client/documents/:id/download` con `Authorization: Bearer <client_session>`; recibe solo archivos Disponibles y los guarda como bytes opacos en un directorio NOVA separado de los paquetes de parches. La app no los ejecuta, interpreta, extrae ni aplica. Al pasar un archivo a Mantenimiento, se excluye del siguiente manifiesto y se elimina su copia local tras una sincronización completa exitosa; un error de red no borra los archivos guardados.
+
 ## Conectar la IPA
 
 GitHub Actions configura `NOVA_API_BASE_URL` en `.github/workflows/build.yml` con la dirección base pública actual `https://novakey-8h6koiim.manus.space/api`. La URL no es un secreto. Si cambia el dominio alojado, actualiza ese valor en el workflow. Para compilar localmente, puedes pasar la misma variable:
@@ -31,7 +33,7 @@ GitHub Actions configura `NOVA_API_BASE_URL` en `.github/workflows/build.yml` co
 NOVA_API_BASE_URL=https://novakey-8h6koiim.manus.space/api ./build_unsigned.sh
 ```
 
-La compilación de IPA requiere macOS y Xcode. El artefacto de GitHub Actions se llamará `NOVA-Build-53-unsigned-IPA` y contendrá `NOVA-Build-53-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
+La compilación de IPA requiere macOS y Xcode. El artefacto de GitHub Actions se llamará `NOVA-Build-54-unsigned-IPA` y contendrá `NOVA-Build-54-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
 
 ## Pruebas
 

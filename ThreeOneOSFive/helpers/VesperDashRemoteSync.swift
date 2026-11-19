@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 enum VesperStringVault {
@@ -258,5 +259,215 @@ extension VesperDashRemoteSync {
         let (data, response) = try await URLSession.shared.data(from: settingsURL)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
         return try JSONDecoder().decode(VesperAppSettings.self, from: data)
+    }
+}
+
+
+struct NOVARemoteDocument: Decodable, Identifiable, Sendable {
+    let id: Int
+    let filename: String
+    let sizeBytes: Int
+    let updatedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case filename
+        case sizeBytes = "size_bytes"
+        case updatedAt = "updated_at"
+    }
+}
+
+private struct NOVARemoteDocumentManifest: Decodable {
+    let version: Int
+    let files: [NOVARemoteDocument]
+}
+
+struct NOVAStoredDocument: Identifiable, Equatable, Sendable {
+    let id: Int
+    let filename: String
+    let sizeBytes: Int
+}
+
+@MainActor
+final class NOVARemoteDocumentSyncStore: ObservableObject {
+    @Published private(set) var files: [NOVAStoredDocument] = []
+    @Published private(set) var isSyncing = false
+    @Published private(set) var hasError = false
+    @Published private(set) var requiresActivation = false
+    @Published private(set) var lastSyncedAt: Date?
+
+    private let maximumFileBytes = 25 * 1024 * 1024
+    private let managedDirectoryName = "NOVAReceivedFiles"
+    private let fileManager = FileManager.default
+
+    func sync(sessionToken: String?) async {
+        guard !isSyncing else { return }
+        guard let sessionToken, !sessionToken.isEmpty else {
+            requiresActivation = true
+            return
+        }
+
+        isSyncing = true
+        hasError = false
+        requiresActivation = false
+        defer { isSyncing = false }
+
+        do {
+            let manifest = try await fetchManifest(sessionToken: sessionToken)
+            guard manifest.version == 1 else { throw URLError(.cannotParseResponse) }
+            let directory = try managedDirectory(createIfNeeded: true)
+            var expectedNames = Set<String>()
+            var storedFiles: [NOVAStoredDocument] = []
+
+            for remote in manifest.files {
+                guard remote.id > 0,
+                      remote.sizeBytes > 0,
+                      remote.sizeBytes <= maximumFileBytes,
+                      Self.isSafeFilename(remote.filename) else {
+                    throw URLError(.cannotParseResponse)
+                }
+                let localName = "\(remote.id)__\(remote.filename)"
+                guard expectedNames.insert(localName).inserted else {
+                    throw URLError(.cannotParseResponse)
+                }
+                let destination = directory.appendingPathComponent(localName, isDirectory: false)
+                let cachedFileIsValid = try hasValidCachedFile(at: destination, expectedSize: remote.sizeBytes)
+                if !cachedFileIsValid {
+                    let data = try await download(remote, sessionToken: sessionToken)
+                    guard data.count == remote.sizeBytes, data.count <= maximumFileBytes else {
+                        throw URLError(.cannotParseResponse)
+                    }
+                    try data.write(to: destination, options: .atomic)
+                }
+                storedFiles.append(NOVAStoredDocument(id: remote.id, filename: remote.filename, sizeBytes: remote.sizeBytes))
+            }
+
+            try removeStaleManagedFiles(in: directory, retaining: expectedNames)
+            files = storedFiles.sorted { $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending }
+            lastSyncedAt = Date()
+            hasError = false
+            requiresActivation = false
+        } catch let error as ManifestHTTPError {
+            hasError = true
+            requiresActivation = error.statusCode == 401 || error.statusCode == 403
+        } catch {
+            hasError = true
+        }
+    }
+
+    func clearManagedFiles() {
+        files = []
+        hasError = false
+        requiresActivation = true
+        lastSyncedAt = nil
+        guard let directory = try? managedDirectory(createIfNeeded: false) else { return }
+        try? removeStaleManagedFiles(in: directory, retaining: [])
+    }
+
+    private func fetchManifest(sessionToken: String) async throws -> NOVARemoteDocumentManifest {
+        var request = URLRequest(url: try documentsURL())
+        request.httpMethod = "GET"
+        request.timeoutInterval = 20
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else { throw ManifestHTTPError(statusCode: http.statusCode) }
+        return try JSONDecoder().decode(NOVARemoteDocumentManifest.self, from: data)
+    }
+
+    private func download(_ remote: NOVARemoteDocument, sessionToken: String) async throws -> Data {
+        var request = URLRequest(url: try documentDownloadURL(id: remote.id))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 120
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else { throw ManifestHTTPError(statusCode: http.statusCode) }
+        let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased().split(separator: ";", maxSplits: 1).first
+        guard contentType == "application/octet-stream" else { throw URLError(.cannotParseResponse) }
+        return data
+    }
+
+    private func documentsURL() throws -> URL {
+        try apiBaseURL()
+            .appendingPathComponent("client", isDirectory: true)
+            .appendingPathComponent("documents", isDirectory: false)
+    }
+
+    private func documentDownloadURL(id: Int) throws -> URL {
+        try apiBaseURL()
+            .appendingPathComponent("client", isDirectory: true)
+            .appendingPathComponent("documents", isDirectory: true)
+            .appendingPathComponent(String(id), isDirectory: true)
+            .appendingPathComponent("download", isDirectory: false)
+    }
+
+    private func apiBaseURL() throws -> URL {
+        guard let url = URL(string: VesperStringVault.novaAPIBaseURL),
+              url.scheme?.lowercased() == "https",
+              url.host != nil,
+              url.user == nil,
+              url.password == nil else {
+            throw URLError(.badURL)
+        }
+        return url
+    }
+
+    private func managedDirectory(createIfNeeded: Bool) throws -> URL {
+        guard let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw URLError(.fileURLUnavailable)
+        }
+        let root = applicationSupport.standardizedFileURL
+        let directory = root.appendingPathComponent(managedDirectoryName, isDirectory: true).standardizedFileURL
+        guard directory.deletingLastPathComponent() == root else { throw URLError(.badURL) }
+        if createIfNeeded {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } else if !fileManager.fileExists(atPath: directory.path) {
+            throw URLError(.fileDoesNotExist)
+        }
+        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else { throw URLError(.cannotWriteToFile) }
+        return directory
+    }
+
+    private func hasValidCachedFile(at url: URL, expectedSize: Int) throws -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else { return false }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory != true, values.isSymbolicLink != true else { throw URLError(.cannotWriteToFile) }
+        return values.fileSize == expectedSize
+    }
+
+    private func removeStaleManagedFiles(in directory: URL, retaining names: Set<String>) throws {
+        let rootPath = directory.standardizedFileURL.path + "/"
+        let children = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [])
+        for child in children {
+            let childPath = child.standardizedFileURL.path
+            guard childPath.hasPrefix(rootPath), Self.isManagedFilename(child.lastPathComponent) else { continue }
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory != true, values.isSymbolicLink != true else { continue }
+            if !names.contains(child.lastPathComponent) { try fileManager.removeItem(at: child) }
+        }
+    }
+
+    private static func isManagedFilename(_ name: String) -> Bool {
+        guard let separator = name.range(of: "__") else { return false }
+        let identifier = name[..<separator.lowerBound]
+        let filename = name[separator.upperBound...]
+        return !filename.isEmpty && identifier.allSatisfy { $0.isNumber } && Int(identifier) != nil
+    }
+
+    private static func isSafeFilename(_ rawName: String) -> Bool {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !name.isEmpty
+            && name != "."
+            && name != ".."
+            && name.lengthOfBytes(using: .utf8) <= 255
+            && !name.contains("/")
+            && !name.contains("\\")
+            && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
 }
