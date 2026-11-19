@@ -212,6 +212,7 @@ struct ContentView: View {
                 targetTitle: selectedPatchTargetTitle,
                 targetBundleID: selectedPatchBundleID
             )
+            NOVAReceivedDocumentsCard(shouldSyncOnReentry: selectedAppTab == 0)
         }
     }
 
@@ -411,10 +412,6 @@ struct ContentView: View {
     private var moreTab: some View {
         VStack(spacing: 16) {
             gameIntro(title: appLanguage.text("vesper.tab.more"), subtitle: appLanguage.text("settings.more_subtitle"), icon: "ellipsis.circle")
-            moreLink(title: appLanguage.text("nova.files.title"), subtitle: appLanguage.text("nova.files.subtitle"), icon: "folder.fill") {
-                NOVAReceivedDocumentsScreen()
-                    .navigationTitle(appLanguage.text("nova.files.title"))
-            }
             moreLink(title: appLanguage.text("vesper.tab.profile"), subtitle: appLanguage.text("vesper.profile.subtitle"), icon: "person.crop.circle") {
                 ScrollView(showsIndicators: false) { profileTab.padding(.horizontal, 16).padding(.vertical, 14) }
                     .background(AppTheme.pageBackground.ignoresSafeArea())
@@ -1786,135 +1783,5 @@ private struct PanelScanner: View {
             }
         }
         .allowsHitTesting(false)
-    }
-}
-
-private struct NOVAReceivedDocumentsScreen: View {
-    @Environment(\.appLanguage) private var appLanguage
-    @Environment(\.scenePhase) private var scenePhase
-    @EnvironmentObject private var licenseManager: LicenseManager
-    @StateObject private var store = NOVARemoteDocumentSyncStore()
-
-    var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 19, weight: .bold))
-                            .foregroundStyle(AppTheme.accent)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(appLanguage.text("nova.files.title"))
-                                .font(.system(size: 17, weight: .black, design: .rounded))
-                                .foregroundStyle(AppTheme.paper)
-                            Text(appLanguage.text("nova.files.subtitle"))
-                                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                                .foregroundStyle(AppTheme.paper.opacity(0.55))
-                        }
-                        Spacer(minLength: 4)
-                        Button {
-                            Task { await store.sync(sessionToken: licenseManager.clientSessionToken()) }
-                        } label: {
-                            Label(appLanguage.text(store.isSyncing ? "nova.files.syncing" : "nova.files.sync"), systemImage: "arrow.clockwise")
-                                .font(.system(size: 9, weight: .black, design: .rounded))
-                                .foregroundStyle(AppTheme.ink)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(AppTheme.accent, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(store.isSyncing || !licenseManager.isActive)
-                    }
-
-                    if let lastSyncedAt = store.lastSyncedAt {
-                        Text(appLanguage.text("nova.files.last_sync", lastSyncedAt.formatted(date: .abbreviated, time: .shortened)))
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundStyle(AppTheme.paper.opacity(0.55))
-                    }
-
-                    if !licenseManager.isActive || store.requiresActivation {
-                        Label(appLanguage.text("nova.files.auth_required"), systemImage: "key.fill")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(AppTheme.secondaryAccent)
-                    } else if store.hasError {
-                        Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(AppTheme.secondaryAccent)
-                    } else if store.files.isEmpty && !store.isSyncing {
-                        Text(appLanguage.text("nova.files.none"))
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundStyle(AppTheme.paper.opacity(0.7))
-                        Text(appLanguage.text("nova.files.none_detail"))
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundStyle(AppTheme.paper.opacity(0.52))
-                    }
-
-                    ForEach(store.files) { file in
-                        HStack(spacing: 11) {
-                            Image(systemName: "doc.fill")
-                                .foregroundStyle(AppTheme.accent)
-                                .frame(width: 38, height: 38)
-                                .background(AppTheme.ink, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(file.filename)
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                                    .foregroundStyle(AppTheme.paper)
-                                    .lineLimit(2)
-                                    .textSelection(.enabled)
-                                Text(ByteCountFormatter.string(fromByteCount: Int64(file.sizeBytes), countStyle: .file))
-                                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                                    .foregroundStyle(AppTheme.paper.opacity(0.55))
-                            }
-                            Spacer(minLength: 4)
-                            Label(appLanguage.text("nova.files.saved"), systemImage: "checkmark.circle.fill")
-                                .font(.system(size: 8, weight: .black, design: .rounded))
-                                .foregroundStyle(.green)
-                        }
-                        .padding(.vertical, 8)
-                        Divider().overlay(AppTheme.paper.opacity(0.1))
-                    }
-
-                    Text(appLanguage.text("nova.files.maintenance_note"))
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundStyle(AppTheme.paper.opacity(0.52))
-                        .padding(.top, 4)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(AppTheme.referenceCard, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(AppTheme.secondaryAccent.opacity(0.25), lineWidth: 1))
-            }
-            .padding(16)
-        }
-        .background(AppTheme.pageBackground.ignoresSafeArea())
-        .task {
-            guard licenseManager.isActive else { return }
-            await store.sync(sessionToken: licenseManager.clientSessionToken())
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(60))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                guard licenseManager.isActive else { continue }
-                await store.sync(sessionToken: licenseManager.clientSessionToken())
-            }
-        }
-        .onChange(of: licenseManager.clientSessionRevision) { _ in
-            guard licenseManager.isActive else { return }
-            Task { await store.sync(sessionToken: licenseManager.clientSessionToken()) }
-        }
-        .onChange(of: licenseManager.isActive) { isActive in
-            if isActive {
-                Task { await store.sync(sessionToken: licenseManager.clientSessionToken()) }
-            } else {
-                store.clearManagedFiles()
-            }
-        }
-        .onChange(of: scenePhase) { phase in
-            guard phase == .active, licenseManager.isActive else { return }
-            Task { await store.sync(sessionToken: licenseManager.clientSessionToken()) }
-        }
     }
 }

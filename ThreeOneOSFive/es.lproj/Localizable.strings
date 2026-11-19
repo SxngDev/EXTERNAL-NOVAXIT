@@ -77,6 +77,14 @@
 "nova.files.sync_failed" = "ERROR DE SINCRONIZACIÓN";
 "nova.files.auth_required" = "Activa NOVA para sincronizar archivos.";
 "nova.files.updated" = "ARCHIVOS ACTUALIZADOS";
+"nova.files.recent" = "RECIÉN SUBIDO";
+"nova.files.show_hidden" = "MOSTRAR OCULTOS";
+"nova.files.hide_hidden" = "OCULTAR OCULTOS";
+"nova.files.toggle_hint" = "Mostrar u ocultar este adjunto solo en esta lista.";
+"nova.files.visible" = "VISIBLE EN ESTA LISTA";
+"nova.files.hidden" = "OCULTO DE ESTA LISTA";
+"nova.files.passive_notice" = "El control solo cambia la visibilidad aquí; el archivo no se ejecuta ni se aplica.";
+"nova.files.all_hidden" = "Todos los adjuntos están ocultos de esta lista.";
 "settings.more_subtitle" = "OPCIONES DE LA APP";
 "settings.more_detail" = "Color, idioma y soporte";
 "settings.rainbow" = "RGB arcoíris";

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import SwiftUI
 
 enum VesperStringVault {
     static let novaAPIBaseURL: String = {
@@ -286,6 +287,17 @@ struct NOVAStoredDocument: Identifiable, Equatable, Sendable {
     let id: Int
     let filename: String
     let sizeBytes: Int
+    let updatedAt: String?
+
+    var isRecentlyUploaded: Bool {
+        guard let updatedAt else { return false }
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = fractionalFormatter.date(from: updatedAt) ?? ISO8601DateFormatter().date(from: updatedAt)
+        guard let date else { return false }
+        let age = Date().timeIntervalSince(date)
+        return age >= 0 && age < 7 * 24 * 60 * 60
+    }
 }
 
 @MainActor
@@ -339,7 +351,12 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
                     }
                     try data.write(to: destination, options: .atomic)
                 }
-                storedFiles.append(NOVAStoredDocument(id: remote.id, filename: remote.filename, sizeBytes: remote.sizeBytes))
+                storedFiles.append(NOVAStoredDocument(
+                    id: remote.id,
+                    filename: remote.filename,
+                    sizeBytes: remote.sizeBytes,
+                    updatedAt: remote.updatedAt
+                ))
             }
 
             try removeStaleManagedFiles(in: directory, retaining: expectedNames)
@@ -469,5 +486,220 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
             && !name.contains("/")
             && !name.contains("\\")
             && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+}
+
+@MainActor
+struct NOVAReceivedDocumentsCard: View {
+    let shouldSyncOnReentry: Bool
+
+    @Environment(\.appLanguage) private var appLanguage
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var licenseManager: LicenseManager
+    @StateObject private var store = NOVARemoteDocumentSyncStore()
+    @State private var hiddenDocumentIDs = Set<Int>()
+    @State private var showHiddenDocuments = false
+    @State private var pollingEnabled = false
+
+    private var hiddenCount: Int {
+        store.files.filter { hiddenDocumentIDs.contains($0.id) }.count
+    }
+
+    private var displayedFiles: [NOVAStoredDocument] {
+        showHiddenDocuments ? store.files : store.files.filter { !hiddenDocumentIDs.contains($0.id) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(AppTheme.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(appLanguage.text("nova.files.title"))
+                        .font(.system(size: 13, weight: .black, design: .rounded))
+                        .foregroundStyle(AppTheme.paper)
+                    Text(appLanguage.text("nova.files.subtitle"))
+                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                        .foregroundStyle(AppTheme.paper.opacity(0.55))
+                }
+                Spacer(minLength: 4)
+                Button(action: syncNow) {
+                    Label(appLanguage.text(store.isSyncing ? "nova.files.syncing" : "nova.files.sync"), systemImage: "arrow.clockwise")
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                        .foregroundStyle(AppTheme.ink)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .background(AppTheme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isSyncing || !licenseManager.isActive)
+            }
+
+            if let lastSyncedAt = store.lastSyncedAt {
+                Text(appLanguage.text("nova.files.last_sync", lastSyncedAt.formatted(date: .abbreviated, time: .shortened)))
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppTheme.paper.opacity(0.52))
+            }
+
+            if hiddenCount > 0 {
+                Button {
+                    showHiddenDocuments.toggle()
+                } label: {
+                    Label(
+                        "\(appLanguage.text(showHiddenDocuments ? "nova.files.hide_hidden" : "nova.files.show_hidden")) (\(hiddenCount))",
+                        systemImage: showHiddenDocuments ? "eye.slash" : "eye"
+                    )
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppTheme.accent)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !licenseManager.isActive || store.requiresActivation {
+                Label(appLanguage.text("nova.files.auth_required"), systemImage: "key.fill")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppTheme.secondaryAccent)
+            } else if store.hasError {
+                Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppTheme.secondaryAccent)
+            } else if store.files.isEmpty && !store.isSyncing {
+                Text(appLanguage.text("nova.files.none"))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppTheme.paper.opacity(0.72))
+                Text(appLanguage.text("nova.files.none_detail"))
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppTheme.paper.opacity(0.52))
+            } else if !store.files.isEmpty && displayedFiles.isEmpty {
+                Text(appLanguage.text("nova.files.all_hidden"))
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppTheme.paper.opacity(0.55))
+            }
+
+            ForEach(displayedFiles) { file in
+                documentRow(file)
+                if file.id != displayedFiles.last?.id {
+                    Divider().overlay(AppTheme.paper.opacity(0.1))
+                }
+            }
+
+            Text(appLanguage.text("nova.files.passive_notice"))
+                .font(.system(size: 8, weight: .medium, design: .rounded))
+                .foregroundStyle(AppTheme.paper.opacity(0.5))
+                .padding(.top, 2)
+            Text(appLanguage.text("nova.files.maintenance_note"))
+                .font(.system(size: 8, weight: .medium, design: .rounded))
+                .foregroundStyle(AppTheme.paper.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(AppTheme.referenceCard, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(AppTheme.secondaryAccent.opacity(0.25), lineWidth: 1))
+        .onChange(of: shouldSyncOnReentry) { shouldSync in
+            if shouldSync { syncNow() }
+        }
+        .onChange(of: licenseManager.clientSessionRevision) { _ in
+            guard shouldSyncOnReentry, licenseManager.isActive else { return }
+            syncNow()
+        }
+        .onChange(of: licenseManager.isActive) { isActive in
+            if isActive && shouldSyncOnReentry {
+                syncNow()
+            } else if !isActive {
+                store.clearManagedFiles()
+                hiddenDocumentIDs.removeAll()
+                showHiddenDocuments = false
+                pollingEnabled = false
+            }
+        }
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active, shouldSyncOnReentry, licenseManager.isActive else { return }
+            syncNow()
+        }
+        .onChange(of: store.files) { files in
+            hiddenDocumentIDs.formIntersection(Set(files.map(\.id)))
+        }
+        .task(id: shouldSyncOnReentry && pollingEnabled) {
+            guard shouldSyncOnReentry && pollingEnabled else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                guard shouldSyncOnReentry, licenseManager.isActive else { continue }
+                await store.sync(sessionToken: licenseManager.clientSessionToken())
+            }
+        }
+    }
+
+    private func documentRow(_ file: NOVAStoredDocument) -> some View {
+        let isVisible = !hiddenDocumentIDs.contains(file.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            if file.isRecentlyUploaded {
+                HStack(spacing: 6) {
+                    Capsule()
+                        .fill(Color.green)
+                        .frame(width: 18, height: 3)
+                    Text(appLanguage.text("nova.files.recent"))
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                        .tracking(0.5)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "doc.fill")
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 34, height: 34)
+                    .background(AppTheme.ink, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(file.filename)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppTheme.paper)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(file.sizeBytes), countStyle: .file))
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundStyle(AppTheme.paper.opacity(0.52))
+                }
+                Spacer(minLength: 4)
+                Toggle(isOn: visibilityBinding(for: file.id)) {
+                    Text(appLanguage.text("nova.files.toggle_hint"))
+                }
+                .labelsHidden()
+                .tint(AppTheme.accent)
+                .accessibilityLabel(Text(appLanguage.text("nova.files.toggle_hint")))
+            }
+
+            Text(appLanguage.text(isVisible ? "nova.files.visible" : "nova.files.hidden"))
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(isVisible ? AppTheme.accent : AppTheme.paper.opacity(0.5))
+        }
+        .padding(10)
+        .background(AppTheme.ink.opacity(0.62), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.paper.opacity(isVisible ? 0.1 : 0.04), lineWidth: 1))
+        .opacity(isVisible ? 1 : 0.58)
+    }
+
+    private func visibilityBinding(for id: Int) -> Binding<Bool> {
+        Binding(
+            get: { !hiddenDocumentIDs.contains(id) },
+            set: { isVisible in
+                if isVisible {
+                    hiddenDocumentIDs.remove(id)
+                } else {
+                    hiddenDocumentIDs.insert(id)
+                }
+            }
+        )
+    }
+
+    private func syncNow() {
+        guard licenseManager.isActive else { return }
+        pollingEnabled = true
+        Task { await store.sync(sessionToken: licenseManager.clientSessionToken()) }
     }
 }

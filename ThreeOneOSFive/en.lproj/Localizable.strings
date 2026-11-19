@@ -547,6 +547,14 @@
 "nova.files.sync_failed" = "SYNC FAILED";
 "nova.files.auth_required" = "Activate NOVA to synchronize files.";
 "nova.files.updated" = "FILES UPDATED";
+"nova.files.recent" = "JUST UPLOADED";
+"nova.files.show_hidden" = "SHOW HIDDEN";
+"nova.files.hide_hidden" = "HIDE HIDDEN";
+"nova.files.toggle_hint" = "Show or hide this attachment in this list only.";
+"nova.files.visible" = "VISIBLE IN THIS LIST";
+"nova.files.hidden" = "HIDDEN FROM THIS LIST";
+"nova.files.passive_notice" = "This control only changes visibility here; the file is not run or applied.";
+"nova.files.all_hidden" = "All attachments are hidden from this list.";
 "settings.more_subtitle" = "APP OPTIONS";
 "settings.more_detail" = "Color, language and support";
 "settings.rainbow" = "Rainbow RGB";
