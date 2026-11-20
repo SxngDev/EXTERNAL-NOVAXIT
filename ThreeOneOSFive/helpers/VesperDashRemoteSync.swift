@@ -307,10 +307,67 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
     @Published private(set) var hasError = false
     @Published private(set) var requiresActivation = false
     @Published private(set) var lastSyncedAt: Date?
+    @Published private(set) var appliedDocumentIDs: Set<Int>
+    @Published private(set) var operatingDocumentIDs = Set<Int>()
+    @Published private(set) var recoveryRequiredDocumentIDs = Set<Int>()
+    @Published private(set) var operationStatusKeys: [Int: String] = [:]
 
+    private struct ActiveRecord: Codable {
+        let id: Int
+        let projectID: UUID
+        let transactionID: UUID?
+        let filename: String
+        let sizeBytes: Int
+        let updatedAt: String?
+
+        func matches(_ remote: NOVARemoteDocument) -> Bool {
+            filename == remote.filename && sizeBytes == remote.sizeBytes && updatedAt == remote.updatedAt
+        }
+    }
+
+    private static let activeRecordsDefaultsKey = "NOVA.activeRemotePackages.v1"
     private let maximumFileBytes = 25 * 1024 * 1024
     private let managedDirectoryName = "NOVAReceivedFiles"
     private let fileManager = FileManager.default
+    private var activeRecords: [String: ActiveRecord]
+
+    init() {
+        let records = Self.loadActiveRecords()
+        activeRecords = records
+        appliedDocumentIDs = Set(records.values.compactMap { record in
+            let exact = record.transactionID.flatMap {
+                DevicePatchService.receipt(
+                    projectID: record.projectID, transactionID: $0,
+                    targetBundleID: Bundle.main.bundleIdentifier
+                )
+            }
+            let receipt = record.transactionID == nil ? DevicePatchService.latestReceipt(
+                projectID: record.projectID, targetBundleID: Bundle.main.bundleIdentifier
+            ) : exact
+            return receipt == nil ? nil : record.id
+        })
+        recoveryRequiredDocumentIDs = Set(records.values.compactMap { record in
+            let exact = record.transactionID.flatMap {
+                DevicePatchService.receipt(
+                    projectID: record.projectID, transactionID: $0,
+                    targetBundleID: Bundle.main.bundleIdentifier, includePrepared: true
+                )
+            }
+            let applied = record.transactionID.flatMap {
+                DevicePatchService.receipt(
+                    projectID: record.projectID, transactionID: $0,
+                    targetBundleID: Bundle.main.bundleIdentifier
+                )
+            }
+            let preparedWithoutExactID = record.transactionID == nil && DevicePatchService.latestPreparedReceipt(
+                projectID: record.projectID, targetBundleID: Bundle.main.bundleIdentifier
+            ) != nil
+            let unresolvedArtifacts = applied == nil && DevicePatchService.transactionArtifactsExist(
+                projectID: record.projectID, transactionID: record.transactionID
+            )
+            return (exact != nil && applied == nil) || preparedWithoutExactID || unresolvedArtifacts ? record.id : nil
+        })
+    }
 
     func sync(sessionToken: String?) async {
         guard !isSyncing else { return }
@@ -328,41 +385,71 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
             let manifest = try await fetchManifest(sessionToken: sessionToken)
             guard manifest.version == 1 else { throw URLError(.cannotParseResponse) }
             let directory = try managedDirectory(createIfNeeded: true)
-            var expectedNames = Set<String>()
-            var storedFiles: [NOVAStoredDocument] = []
-
+            var remoteByID: [Int: NOVARemoteDocument] = [:]
             for remote in manifest.files {
-                guard remote.id > 0,
-                      remote.sizeBytes > 0,
-                      remote.sizeBytes <= maximumFileBytes,
+                guard remote.id > 0, remoteByID[remote.id] == nil,
+                      remote.sizeBytes > 0, remote.sizeBytes <= maximumFileBytes,
                       Self.isSafeFilename(remote.filename) else {
                     throw URLError(.cannotParseResponse)
                 }
-                let localName = "\(remote.id)__\(remote.filename)"
-                guard expectedNames.insert(localName).inserted else {
-                    throw URLError(.cannotParseResponse)
+                remoteByID[remote.id] = remote
+            }
+
+            var expectedNames = Set<String>()
+            var storedByID: [Int: NOVAStoredDocument] = [:]
+            for record in Array(activeRecords.values) {
+                let remote = remoteByID[record.id]
+                if let remote, record.matches(remote) {
+                    do {
+                        try await reconcile(record)
+                        operationStatusKeys.removeValue(forKey: record.id)
+                        if activeRecords[String(record.id)] != nil {
+                            expectedNames.insert(Self.localName(id: record.id, filename: record.filename))
+                            storedByID[record.id] = Self.stored(record)
+                        }
+                    } catch {
+                        operationStatusKeys[record.id] = Self.statusKey(for: error)
+                        expectedNames.insert(Self.localName(id: record.id, filename: record.filename))
+                        storedByID[record.id] = Self.stored(record)
+                    }
+                } else {
+                    do {
+                        try await restore(record)
+                        activeRecords.removeValue(forKey: String(record.id))
+                        appliedDocumentIDs.remove(record.id)
+                        recoveryRequiredDocumentIDs.remove(record.id)
+                        operationStatusKeys.removeValue(forKey: record.id)
+                        persistActiveRecords()
+                    } catch {
+                        operationStatusKeys[record.id] = Self.statusKey(for: error)
+                        expectedNames.insert(Self.localName(id: record.id, filename: record.filename))
+                        storedByID[record.id] = Self.stored(record)
+                    }
                 }
+            }
+
+            for remote in manifest.files {
+                let localName = Self.localName(id: remote.id, filename: remote.filename)
                 let destination = directory.appendingPathComponent(localName, isDirectory: false)
-                let cachedFileIsValid = try hasValidCachedFile(at: destination, expectedSize: remote.sizeBytes)
-                if !cachedFileIsValid {
+                if !(try hasValidCachedFile(at: destination, expectedSize: remote.sizeBytes)) {
                     let data = try await download(remote, sessionToken: sessionToken)
                     guard data.count == remote.sizeBytes, data.count <= maximumFileBytes else {
                         throw URLError(.cannotParseResponse)
                     }
                     try data.write(to: destination, options: .atomic)
                 }
-                storedFiles.append(NOVAStoredDocument(
-                    id: remote.id,
-                    filename: remote.filename,
-                    sizeBytes: remote.sizeBytes,
-                    updatedAt: remote.updatedAt
-                ))
+                expectedNames.insert(localName)
+                storedByID[remote.id] = NOVAStoredDocument(
+                    id: remote.id, filename: remote.filename,
+                    sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt
+                )
             }
 
             try removeStaleManagedFiles(in: directory, retaining: expectedNames)
-            files = storedFiles.sorted { $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending }
+            operationStatusKeys = operationStatusKeys.filter { storedByID[$0.key] != nil }
+            files = storedByID.values.sorted { $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending }
             lastSyncedAt = Date()
-            hasError = false
+            hasError = !operationStatusKeys.isEmpty
             requiresActivation = false
         } catch let error as ManifestHTTPError {
             hasError = true
@@ -372,13 +459,255 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         }
     }
 
-    func clearManagedFiles() {
-        files = []
-        hasError = false
+    func setApplied(_ shouldApply: Bool, document: NOVAStoredDocument, sessionToken: String?) async {
+        let id = document.id
+        guard !operatingDocumentIDs.contains(id), !recoveryRequiredDocumentIDs.contains(id) else { return }
+        if shouldApply == appliedDocumentIDs.contains(id) { return }
+        operatingDocumentIDs.insert(id)
+        operationStatusKeys.removeValue(forKey: id)
+        defer { operatingDocumentIDs.remove(id) }
+
+        do {
+            if shouldApply {
+                guard let sessionToken, !sessionToken.isEmpty else { throw ManifestHTTPError(statusCode: 401) }
+                try await apply(document, sessionToken: sessionToken)
+                appliedDocumentIDs.insert(id)
+                operationStatusKeys.removeValue(forKey: id)
+            } else {
+                guard let record = activeRecords[String(id)] else {
+                    appliedDocumentIDs.remove(id)
+                    return
+                }
+                try await restore(record)
+                activeRecords.removeValue(forKey: String(id))
+                persistActiveRecords()
+                appliedDocumentIDs.remove(id)
+                recoveryRequiredDocumentIDs.remove(id)
+                operationStatusKeys.removeValue(forKey: id)
+            }
+        } catch {
+            if let record = activeRecords[String(id)] {
+                let exact = record.transactionID.flatMap {
+                    DevicePatchService.receipt(
+                        projectID: record.projectID, transactionID: $0,
+                        targetBundleID: Bundle.main.bundleIdentifier, includePrepared: true
+                    )
+                }
+                let exactApplied = record.transactionID.flatMap {
+                    DevicePatchService.receipt(
+                        projectID: record.projectID, transactionID: $0,
+                        targetBundleID: Bundle.main.bundleIdentifier
+                    )
+                }
+                let applied = exactApplied != nil || (record.transactionID == nil && DevicePatchService.latestReceipt(
+                    projectID: record.projectID, targetBundleID: Bundle.main.bundleIdentifier
+                ) != nil)
+                let prepared = (exact != nil && exactApplied == nil) || (record.transactionID == nil && DevicePatchService.latestPreparedReceipt(
+                    projectID: record.projectID, targetBundleID: Bundle.main.bundleIdentifier
+                ) != nil)
+                if applied { appliedDocumentIDs.insert(id) }
+                if prepared { recoveryRequiredDocumentIDs.insert(id) }
+            }
+            operationStatusKeys[id] = Self.statusKey(for: error)
+        }
+    }
+
+    func deactivate() async {
         requiresActivation = true
+        while isSyncing || !operatingDocumentIDs.isEmpty {
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+        }
+        var keepNames = Set<String>()
+        for record in Array(activeRecords.values) {
+            do {
+                try await restore(record)
+                activeRecords.removeValue(forKey: String(record.id))
+                appliedDocumentIDs.remove(record.id)
+                recoveryRequiredDocumentIDs.remove(record.id)
+                operationStatusKeys.removeValue(forKey: record.id)
+            } catch {
+                keepNames.insert(Self.localName(id: record.id, filename: record.filename))
+                operationStatusKeys[record.id] = Self.statusKey(for: error)
+            }
+        }
+        persistActiveRecords()
+        files = activeRecords.values.map(Self.stored).sorted {
+            $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending
+        }
+        if let directory = try? managedDirectory(createIfNeeded: false) {
+            try? removeStaleManagedFiles(in: directory, retaining: keepNames)
+        }
+        hasError = !activeRecords.isEmpty
         lastSyncedAt = nil
-        guard let directory = try? managedDirectory(createIfNeeded: false) else { return }
-        try? removeStaleManagedFiles(in: directory, retaining: [])
+    }
+
+    private func apply(_ remote: NOVAStoredDocument, sessionToken: String) async throws {
+        guard remote.filename.lowercased().hasSuffix(".3105") else {
+            throw PatchPackageError.unsupportedFormat
+        }
+        let data = try await download(
+            NOVARemoteDocument(id: remote.id, filename: remote.filename, sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt),
+            sessionToken: sessionToken
+        )
+        guard data.count == remote.sizeBytes, data.count <= maximumFileBytes else {
+            throw PatchPackageError.sizeLimitExceeded
+        }
+        _ = try PatchPackageCodec.inspect(data)
+        let decoded = try PatchPackageCodec.decode(data, password: nil)
+        let project = decoded.project
+        let target = Bundle.main.bundleIdentifier
+        guard project.allBundleIdentifiers.count == 1,
+              project.allBundleIdentifiers.first == target else {
+            throw PatchPackageError.invalidBundleIdentifier
+        }
+
+        let record = ActiveRecord(
+            id: remote.id, projectID: project.id, transactionID: nil, filename: remote.filename,
+            sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt
+        )
+        guard !activeRecords.values.contains(where: { $0.projectID == project.id && $0.id != remote.id }) else {
+            throw PatchPackageError.duplicateTarget
+        }
+        activeRecords[String(remote.id)] = record
+        persistActiveRecords()
+        do {
+            let receipt = try await Task.detached(priority: .userInitiated) {
+                try DevicePatchService.applyNOVAPackage(project: project)
+            }.value
+            activeRecords[String(remote.id)] = ActiveRecord(
+                id: remote.id, projectID: project.id, transactionID: receipt.id,
+                filename: remote.filename, sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt
+            )
+            persistActiveRecords()
+        } catch {
+            if let prepared = DevicePatchService.latestPreparedReceipt(
+                projectID: project.id, targetBundleID: target
+            ) {
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try DevicePatchService.restoreNOVAPackage(receipt: prepared)
+                    }.value
+                    activeRecords.removeValue(forKey: String(remote.id))
+                    persistActiveRecords()
+                } catch {
+                    recoveryRequiredDocumentIDs.insert(remote.id)
+                }
+            } else {
+                activeRecords.removeValue(forKey: String(remote.id))
+                persistActiveRecords()
+            }
+            throw error
+        }
+    }
+
+    private func reconcile(_ record: ActiveRecord) async throws {
+        if let applied = appliedReceipt(for: record) {
+            guard try PatchTransaction.requiredBundleIdentifiers(for: applied) == [Bundle.main.bundleIdentifier].compactMap({ $0 }) else {
+                throw PatchPackageError.invalidBundleIdentifier
+            }
+            appliedDocumentIDs.insert(record.id)
+            recoveryRequiredDocumentIDs.remove(record.id)
+            return
+        }
+        if let prepared = preparedReceipt(for: record) {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try DevicePatchService.restoreNOVAPackage(receipt: prepared)
+                }.value
+                activeRecords.removeValue(forKey: String(record.id))
+                appliedDocumentIDs.remove(record.id)
+                recoveryRequiredDocumentIDs.remove(record.id)
+                persistActiveRecords()
+            } catch {
+                recoveryRequiredDocumentIDs.insert(record.id)
+                throw error
+            }
+            return
+        }
+        if DevicePatchService.transactionArtifactsExist(
+            projectID: record.projectID, transactionID: record.transactionID
+        ) {
+            recoveryRequiredDocumentIDs.insert(record.id)
+            throw PatchPackageError.restoreFailed
+        }
+        activeRecords.removeValue(forKey: String(record.id))
+        appliedDocumentIDs.remove(record.id)
+        recoveryRequiredDocumentIDs.remove(record.id)
+        persistActiveRecords()
+    }
+
+    private func restore(_ record: ActiveRecord) async throws {
+        if let receipt = outstandingReceipt(for: record) {
+            try await Task.detached(priority: .userInitiated) {
+                try DevicePatchService.restoreNOVAPackage(receipt: receipt)
+            }.value
+        } else if DevicePatchService.transactionArtifactsExist(
+            projectID: record.projectID, transactionID: record.transactionID
+        ) {
+            throw PatchPackageError.restoreFailed
+        }
+    }
+
+    private func appliedReceipt(for record: ActiveRecord) -> PatchTransactionReceipt? {
+        if let transactionID = record.transactionID {
+            return DevicePatchService.receipt(
+                projectID: record.projectID, transactionID: transactionID,
+                targetBundleID: Bundle.main.bundleIdentifier
+            )
+        }
+        return DevicePatchService.latestReceipt(
+            projectID: record.projectID, targetBundleID: Bundle.main.bundleIdentifier
+        )
+    }
+
+    private func preparedReceipt(for record: ActiveRecord) -> PatchTransactionReceipt? {
+        if let transactionID = record.transactionID {
+            let any = DevicePatchService.receipt(
+                projectID: record.projectID, transactionID: transactionID,
+                targetBundleID: Bundle.main.bundleIdentifier, includePrepared: true
+            )
+            return appliedReceipt(for: record) == nil ? any : nil
+        }
+        return DevicePatchService.latestPreparedReceipt(
+            projectID: record.projectID, targetBundleID: Bundle.main.bundleIdentifier
+        )
+    }
+
+    private func outstandingReceipt(for record: ActiveRecord) -> PatchTransactionReceipt? {
+        appliedReceipt(for: record) ?? preparedReceipt(for: record)
+    }
+
+    private func persistActiveRecords() {
+        guard let data = try? JSONEncoder().encode(activeRecords) else { return }
+        UserDefaults.standard.set(data, forKey: Self.activeRecordsDefaultsKey)
+    }
+
+    private static func loadActiveRecords() -> [String: ActiveRecord] {
+        guard let data = UserDefaults.standard.data(forKey: activeRecordsDefaultsKey),
+              let records = try? JSONDecoder().decode([String: ActiveRecord].self, from: data) else { return [:] }
+        return records
+    }
+
+    private static func localName(id: Int, filename: String) -> String { "\(id)__\(filename)" }
+
+    private static func stored(_ record: ActiveRecord) -> NOVAStoredDocument {
+        NOVAStoredDocument(id: record.id, filename: record.filename, sizeBytes: record.sizeBytes, updatedAt: record.updatedAt)
+    }
+
+    private static func statusKey(for error: Error) -> String {
+        if let packageError = error as? PatchPackageError {
+            switch packageError {
+            case .unsupportedFormat, .unsupportedVersion: return "nova.files.package_invalid"
+            case .invalidBundleIdentifier: return "nova.files.wrong_target"
+            case .invalidPasswordOrCorruptedPackage: return "nova.files.package_invalid"
+            case .restoreFailed, .targetAppUnavailable(_), .missingTarget(_), .symbolicLinkUnsupported: return "nova.files.restore_failed"
+            default: return "nova.files.apply_failed"
+            }
+        }
+        if let httpError = error as? ManifestHTTPError, httpError.statusCode == 401 || httpError.statusCode == 403 {
+            return "nova.files.auth_required"
+        }
+        return "nova.files.apply_failed"
     }
 
     private func fetchManifest(sessionToken: String) async throws -> NOVARemoteDocumentManifest {
@@ -410,14 +739,12 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
     }
 
     private func documentsURL() throws -> URL {
-        try apiBaseURL()
-            .appendingPathComponent("client", isDirectory: true)
+        try apiBaseURL().appendingPathComponent("client", isDirectory: true)
             .appendingPathComponent("documents", isDirectory: false)
     }
 
     private func documentDownloadURL(id: Int) throws -> URL {
-        try apiBaseURL()
-            .appendingPathComponent("client", isDirectory: true)
+        try apiBaseURL().appendingPathComponent("client", isDirectory: true)
             .appendingPathComponent("documents", isDirectory: true)
             .appendingPathComponent(String(id), isDirectory: true)
             .appendingPathComponent("download", isDirectory: false)
@@ -425,12 +752,8 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
 
     private func apiBaseURL() throws -> URL {
         guard let url = URL(string: VesperStringVault.novaAPIBaseURL),
-              url.scheme?.lowercased() == "https",
-              url.host != nil,
-              url.user == nil,
-              url.password == nil else {
-            throw URLError(.badURL)
-        }
+              url.scheme?.lowercased() == "https", url.host != nil,
+              url.user == nil, url.password == nil else { throw URLError(.badURL) }
         return url
     }
 
@@ -479,16 +802,12 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
 
     private static func isSafeFilename(_ rawName: String) -> Bool {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !name.isEmpty
-            && name != "."
-            && name != ".."
+        return !name.isEmpty && name != "." && name != ".."
             && name.lengthOfBytes(using: .utf8) <= 255
-            && !name.contains("/")
-            && !name.contains("\\")
+            && !name.contains("/") && !name.contains("\\")
             && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
 }
-
 @MainActor
 struct NOVAReceivedDocumentsCard: View {
     let shouldSyncOnReentry: Bool
@@ -497,28 +816,14 @@ struct NOVAReceivedDocumentsCard: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var licenseManager: LicenseManager
     @StateObject private var store = NOVARemoteDocumentSyncStore()
-    @State private var hiddenDocumentIDs = Set<Int>()
-    @State private var showHiddenDocuments = false
     @State private var pollingEnabled = false
-
-    private var hiddenCount: Int {
-        store.files.filter { hiddenDocumentIDs.contains($0.id) }.count
-    }
-
-    private var displayedFiles: [NOVAStoredDocument] {
-        showHiddenDocuments ? store.files : store.files.filter { !hiddenDocumentIDs.contains($0.id) }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(LinearGradient(
-                            colors: [AppTheme.accent, AppTheme.secondaryAccent],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
+                        .fill(LinearGradient(colors: [AppTheme.accent, AppTheme.secondaryAccent], startPoint: .topLeading, endPoint: .bottomTrailing))
                     Image(systemName: "square.stack.3d.up.fill")
                         .font(.system(size: 26, weight: .black))
                         .foregroundStyle(.white)
@@ -555,20 +860,6 @@ struct NOVAReceivedDocumentsCard: View {
                     .foregroundStyle(AppTheme.paper.opacity(0.52))
             }
 
-            if hiddenCount > 0 {
-                Button {
-                    showHiddenDocuments.toggle()
-                } label: {
-                    Label(
-                        "\(appLanguage.text(showHiddenDocuments ? "nova.files.hide_hidden" : "nova.files.show_hidden")) (\(hiddenCount))",
-                        systemImage: showHiddenDocuments ? "eye.slash" : "eye"
-                    )
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(AppTheme.accent)
-                }
-                .buttonStyle(.plain)
-            }
-
             if !licenseManager.isActive || store.requiresActivation {
                 Label(appLanguage.text("nova.files.auth_required"), systemImage: "key.fill")
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
@@ -577,27 +868,25 @@ struct NOVAReceivedDocumentsCard: View {
                 Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
                     .foregroundStyle(AppTheme.secondaryAccent)
-            } else if store.files.isEmpty && !store.isSyncing {
+            }
+
+            if store.files.isEmpty && !store.isSyncing {
                 Text(appLanguage.text("nova.files.none"))
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(AppTheme.paper.opacity(0.72))
                 Text(appLanguage.text("nova.files.none_detail"))
                     .font(.system(size: 8, weight: .medium, design: .rounded))
                     .foregroundStyle(AppTheme.paper.opacity(0.52))
-            } else if !store.files.isEmpty && displayedFiles.isEmpty {
-                Text(appLanguage.text("nova.files.all_hidden"))
-                    .font(.system(size: 8, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppTheme.paper.opacity(0.55))
             }
 
-            ForEach(displayedFiles) { file in
+            ForEach(store.files) { file in
                 documentRow(file)
-                if file.id != displayedFiles.last?.id {
+                if file.id != store.files.last?.id {
                     Divider().overlay(AppTheme.paper.opacity(0.1))
                 }
             }
 
-            Text(appLanguage.text("nova.files.passive_notice"))
+            Text(appLanguage.text("nova.files.apply_notice"))
                 .font(.system(size: 8, weight: .medium, design: .rounded))
                 .foregroundStyle(AppTheme.paper.opacity(0.5))
                 .padding(.top, 2)
@@ -620,27 +909,18 @@ struct NOVAReceivedDocumentsCard: View {
             if isActive && shouldSyncOnReentry {
                 syncNow()
             } else if !isActive {
-                store.clearManagedFiles()
-                hiddenDocumentIDs.removeAll()
-                showHiddenDocuments = false
                 pollingEnabled = false
+                Task { await store.deactivate() }
             }
         }
         .onChange(of: scenePhase) { phase in
             guard phase == .active, shouldSyncOnReentry, licenseManager.isActive else { return }
             syncNow()
         }
-        .onChange(of: store.files) { files in
-            hiddenDocumentIDs.formIntersection(Set(files.map(\.id)))
-        }
         .task(id: shouldSyncOnReentry && pollingEnabled) {
             guard shouldSyncOnReentry && pollingEnabled else { return }
             while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(60))
-                } catch {
-                    return
-                }
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
                 guard !Task.isCancelled else { return }
                 guard shouldSyncOnReentry, licenseManager.isActive else { continue }
                 await store.sync(sessionToken: licenseManager.clientSessionToken())
@@ -649,20 +929,21 @@ struct NOVAReceivedDocumentsCard: View {
     }
 
     private func documentRow(_ file: NOVAStoredDocument) -> some View {
-        let isVisible = !hiddenDocumentIDs.contains(file.id)
+        let isApplied = store.appliedDocumentIDs.contains(file.id)
+        let isBusy = store.operatingDocumentIDs.contains(file.id)
+        let needsRecovery = store.recoveryRequiredDocumentIDs.contains(file.id)
+        let statusKey = store.operationStatusKeys[file.id]
+
         return VStack(alignment: .leading, spacing: 8) {
             if file.isRecentlyUploaded {
                 HStack(spacing: 6) {
-                    Capsule()
-                        .fill(Color.green)
-                        .frame(width: 18, height: 3)
+                    Capsule().fill(Color.green).frame(width: 18, height: 3)
                     Text(appLanguage.text("nova.files.recent"))
                         .font(.system(size: 8, weight: .black, design: .rounded))
                         .tracking(0.5)
                         .foregroundStyle(.green)
                 }
             }
-
             HStack(spacing: 10) {
                 Image(systemName: "doc.fill")
                     .foregroundStyle(AppTheme.accent)
@@ -679,35 +960,33 @@ struct NOVAReceivedDocumentsCard: View {
                         .foregroundStyle(AppTheme.paper.opacity(0.52))
                 }
                 Spacer(minLength: 4)
-                Toggle(isOn: visibilityBinding(for: file.id)) {
+                Toggle(isOn: Binding(
+                    get: { store.appliedDocumentIDs.contains(file.id) },
+                    set: { desiredState in
+                        Task {
+                            await store.setApplied(
+                                desiredState,
+                                document: file,
+                                sessionToken: licenseManager.clientSessionToken()
+                            )
+                        }
+                    }
+                )) {
                     Text(appLanguage.text("nova.files.toggle_hint"))
                 }
                 .labelsHidden()
                 .tint(AppTheme.accent)
                 .accessibilityLabel(Text(appLanguage.text("nova.files.toggle_hint")))
+                .disabled(isBusy || needsRecovery || store.isSyncing || (!licenseManager.isActive && !isApplied))
             }
-
-            Text(appLanguage.text(isVisible ? "nova.files.visible" : "nova.files.hidden"))
+            let stateKey = statusKey ?? (needsRecovery ? "nova.files.recovery_required" : (isBusy ? "nova.files.processing" : (isApplied ? "nova.files.applied" : "nova.files.not_applied")))
+            Text(appLanguage.text(stateKey))
                 .font(.system(size: 7, weight: .bold, design: .rounded))
-                .foregroundStyle(isVisible ? AppTheme.accent : AppTheme.paper.opacity(0.5))
+                .foregroundStyle(needsRecovery || statusKey != nil ? AppTheme.secondaryAccent : (isApplied ? AppTheme.accent : AppTheme.paper.opacity(0.5)))
         }
         .padding(10)
         .background(AppTheme.ink.opacity(0.62), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.paper.opacity(isVisible ? 0.1 : 0.04), lineWidth: 1))
-        .opacity(isVisible ? 1 : 0.58)
-    }
-
-    private func visibilityBinding(for id: Int) -> Binding<Bool> {
-        Binding(
-            get: { !hiddenDocumentIDs.contains(id) },
-            set: { isVisible in
-                if isVisible {
-                    hiddenDocumentIDs.remove(id)
-                } else {
-                    hiddenDocumentIDs.insert(id)
-                }
-            }
-        )
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.paper.opacity(isApplied ? 0.18 : 0.08), lineWidth: 1))
     }
 
     private func syncNow() {

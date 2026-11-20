@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-struct PatchTransactionReceipt: Equatable, Identifiable {
+struct PatchTransactionReceipt: Equatable, Identifiable, Sendable {
     let id: UUID
     let projectID: UUID
     let journalURL: URL
@@ -355,6 +355,100 @@ enum PatchTransaction {
                 journalURL: $0.1
             )
         }
+    }
+
+    static func latestPreparedReceipt(
+        projectID: UUID,
+        backupRoot: URL,
+        targetBundleID: String? = nil,
+        fileManager: FileManager = .default
+    ) -> PatchTransactionReceipt? {
+        let projectDirectory = backupRoot.appendingPathComponent(projectID.uuidString, isDirectory: true)
+        guard let directories = try? fileManager.contentsOfDirectory(
+            at: projectDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        return directories.compactMap { directory -> (Journal, URL)? in
+            let url = directory.appendingPathComponent(journalFilename)
+            guard let journal = try? readJournal(url), journal.status == .prepared else { return nil }
+            if let targetBundleID {
+                let bundleIDs = journal.records.map(\.bundleID)
+                    + (journal.createdDirectories ?? []).map(\.bundleID)
+                guard bundleIDs.contains(targetBundleID) else { return nil }
+            }
+            return (journal, url)
+        }
+        .sorted { $0.0.createdAt > $1.0.createdAt }
+        .first
+        .map {
+            PatchTransactionReceipt(
+                id: $0.0.transactionID,
+                projectID: $0.0.projectID,
+                journalURL: $0.1
+            )
+        }
+    }
+
+    static func receipt(
+        projectID: UUID,
+        transactionID: UUID,
+        backupRoot: URL,
+        targetBundleID: String? = nil,
+        includePrepared: Bool = false,
+        fileManager: FileManager = .default
+    ) -> PatchTransactionReceipt? {
+        let projectDirectory = backupRoot.appendingPathComponent(projectID.uuidString, isDirectory: true)
+        guard let directories = try? fileManager.contentsOfDirectory(
+            at: projectDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        for directory in directories {
+            let url = directory.appendingPathComponent(journalFilename)
+            guard let journal = try? readJournal(url),
+                  journal.schemaVersion == schemaVersion,
+                  journal.projectID == projectID,
+                  journal.transactionID == transactionID,
+                  (journal.status == .applied || (includePrepared && journal.status == .prepared)) else {
+                continue
+            }
+            let bundleIDs = journal.records.map(\.bundleID)
+                + (journal.createdDirectories ?? []).map(\.bundleID)
+            if let targetBundleID, Set(bundleIDs) != Set([targetBundleID]) { continue }
+            return PatchTransactionReceipt(id: transactionID, projectID: projectID, journalURL: url)
+        }
+        return nil
+    }
+
+    static func transactionArtifactsExist(
+        projectID: UUID,
+        transactionID: UUID? = nil,
+        backupRoot: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        let projectDirectory = backupRoot.appendingPathComponent(projectID.uuidString, isDirectory: true)
+        let directories: [URL]
+        if let transactionID {
+            directories = [projectDirectory.appendingPathComponent(transactionID.uuidString, isDirectory: true)]
+        } else {
+            directories = (try? fileManager.contentsOfDirectory(
+                at: projectDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        }
+        for directory in directories {
+            let journalURL = directory.appendingPathComponent(journalFilename)
+            guard fileManager.fileExists(atPath: journalURL.path) else { continue }
+            guard let journal = try? readJournal(journalURL) else { return true }
+            if journal.projectID == projectID && (journal.status == .prepared || journal.status == .applied) {
+                return true
+            }
+        }
+        return false
     }
 
     static func requiredBundleIdentifiers(for receipt: PatchTransactionReceipt) throws -> [String] {

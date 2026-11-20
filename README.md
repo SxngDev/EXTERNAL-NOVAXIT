@@ -31,11 +31,14 @@ GitHub Actions configura `NOVA_API_BASE_URL` en `.github/workflows/build.yml` co
 NOVA_API_BASE_URL=https://novakey-8h6koiim.manus.space/api ./build_unsigned.sh
 ```
 
-Build 57 parte de Build 56, que conserva la base estable de Build 52. El contenido aparece como una tarjeta NOVA de gran formato dentro de AIM, sin una pantalla separada llamada «Archivos», con una marca «Recién subido» durante siete días. El switch por fila solo muestra u oculta el elemento en la lista local; no ejecuta ni aplica contenido. La sincronización manual no se dispara al iniciar la app; al actualizar comienza una consulta cada 60 segundos mientras AIM permanece activa. El artefacto de GitHub Actions se llamará `NOVA-Build-57-unsigned-IPA` y contendrá `NOVA-Build-57-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
+Build 58 parte de Build 57 (con base estable en Build 52). El contenido aparece como una tarjeta NOVA de gran formato dentro de AIM, sin una pantalla separada llamada «Archivos», con una marca «Recién subido» durante siete días. El switch por elemento solo acepta paquetes estructurados `3105PATCH` y exige que el único bundle de destino sea el de NOVA (`Bundle.main.bundleIdentifier`); al encender, vuelve a descargar y validar el paquete antes de llamar a `DevicePatchService.apply`, y al apagar restaura el recibo transaccional. El ID remoto y el ID de proyecto se persisten para evitar dobles aplicaciones, recuperar journals `prepared` y restaurar antes de retirar contenido ausente/en mantenimiento o cerrar sesión. Si la restauración falla, se conserva el recibo, se bloquea la operación y se muestra el error. No se dirige a Free Fire ni a otra app. La sincronización manual inicia una consulta cada 60 segundos mientras AIM permanece activa. El artefacto de GitHub Actions se llamará `NOVA-Build-58-unsigned-IPA` y contendrá `NOVA-Build-58-unsigned.ipa`. La IPA es sin firmar y debes firmarla con tu método habitual antes de instalarla.
 
 ## Pruebas
 
 ```bash
 python3 -m unittest discover -s nova-api -v
+python3 -m unittest discover -s tests -v
 python3 generate_embedded_localizations.py --check
 ```
+
+La verificación en Linux cubre los contratos estáticos de destino NOVA, recibos persistidos y orden de restauración; la compilación Swift/IPA y la verificación final se ejecutan en macOS mediante GitHub Actions. Los paquetes protegidos por contraseña no se aplican desde la tarjeta remota porque esta ruta no solicita contraseñas.
