@@ -14,7 +14,8 @@ class NOVARemotePackageContractTests(unittest.TestCase):
         self.assertIn("guard bundleIDs == [target]", SERVICE)
 
     def test_remote_activation_decodes_structured_package_before_apply(self):
-        self.assertIn('remote.filename.lowercased().hasSuffix(".3105")', REMOTE)
+        self.assertIn('document.filename.lowercased().hasSuffix(".3105")', REMOTE)
+        self.assertIn('$0.filename.lowercased().hasSuffix(".3105")', REMOTE)
         self.assertIn("PatchPackageCodec.inspect(data)", REMOTE)
         self.assertIn("PatchPackageCodec.decode(data, password: nil)", REMOTE)
         self.assertIn("DevicePatchService.applyNOVAPackage(project: project)", REMOTE)

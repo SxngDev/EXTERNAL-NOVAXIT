@@ -558,6 +558,8 @@
 "nova.files.visible" = "SHOWN HERE";
 "nova.files.hidden" = "HIDDEN HERE";
 "nova.files.apply_notice" = "Only valid 3105PATCH packages targeting NOVA exclusively are accepted.";
+"nova.files.version" = "VERSION";
+"nova.files.unavailable" = "UNAVAILABLE · MAINTENANCE";
 "nova.files.applied" = "APPLIED TO NOVA";
 "nova.files.not_applied" = "RESTORED · NOT APPLIED";
 "nova.files.processing" = "TRANSACTION IN PROGRESS…";

@@ -59,6 +59,8 @@ struct RemotePatch: Codable, Identifiable, Sendable {
     let filename: String
     let sha256: String
     let version: String
+    let size: Int?
+    let updated_at: Int?
     let download_url: String
     let image_url: String?
     let status_text: String?
@@ -100,6 +102,13 @@ struct ManifestHTTPError: LocalizedError {
 enum VesperDashRemoteSync {
     static let manifestURL = URL(string: VesperStringVault.vesperDashPatchesURL + "/patches")!
 
+    static func fetchNOVAPackageManifest(sessionToken: String) async throws -> VesperDashManifest {
+        var components = URLComponents(url: manifestURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "catalog", value: "nova")]
+        guard let url = components?.url else { throw URLError(.badURL) }
+        return try await fetchManifest(at: url, sessionToken: sessionToken)
+    }
+
     static func fetchReleasePolicy() async throws -> VesperReleasePolicy {
         var components = URLComponents(url: manifestURL, resolvingAgainstBaseURL: false)!
         components.path = (URL(string: VesperStringVault.novaAPIBaseURL)?.path ?? "/api") + "/release-policy"
@@ -135,6 +144,28 @@ enum VesperDashRemoteSync {
         guard let url = validDownloadURL(for: remote) else {
             throw PatchPackageError.remoteImportFailed
         }
+        return try await downloadFile(at: url, sessionToken: sessionToken, using: session, into: directory)
+    }
+
+    static func downloadNOVAPackageFile(
+        for remote: RemotePatch,
+        sessionToken: String,
+        using session: URLSession,
+        into directory: URL
+    ) async throws -> URL {
+        guard let url = validNOVAPackageDownloadURL(for: remote) else {
+            throw PatchPackageError.remoteImportFailed
+        }
+        return try await downloadFile(at: url, sessionToken: sessionToken, using: session, into: directory, requireOctetStream: true)
+    }
+
+    private static func downloadFile(
+        at url: URL,
+        sessionToken: String,
+        using session: URLSession,
+        into directory: URL,
+        requireOctetStream: Bool = false
+    ) async throws -> URL {
         var request = URLRequest(url: url)
         request.timeoutInterval = 180
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -145,13 +176,21 @@ enum VesperDashRemoteSync {
               (200..<300).contains(http.statusCode) else {
             throw PatchPackageError.remoteImportFailed
         }
+        if requireOctetStream {
+            let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased().split(separator: ";", maxSplits: 1).first
+            guard contentType == "application/octet-stream" else { throw PatchPackageError.remoteImportFailed }
+        }
         let destination = directory.appendingPathComponent("\(UUID().uuidString).download")
         try FileManager.default.moveItem(at: temporaryURL, to: destination)
         return destination
     }
 
     static func fetchManifest(sessionToken: String) async throws -> VesperDashManifest {
-        var request = URLRequest(url: manifestURL)
+        try await fetchManifest(at: manifestURL, sessionToken: sessionToken)
+    }
+
+    private static func fetchManifest(at url: URL, sessionToken: String) async throws -> VesperDashManifest {
+        var request = URLRequest(url: url)
         request.timeoutInterval = 15
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
@@ -175,6 +214,20 @@ enum VesperDashRemoteSync {
               url.user == nil, url.password == nil,
               patch.bundle_id == "com.dts.freefireth" || patch.bundle_id == "com.dts.freefiremax",
               patch.filename.lowercased().hasSuffix(".3105") else { return nil }
+        return url
+    }
+
+    static func validNOVAPackageDownloadURL(for patch: RemotePatch) -> URL? {
+        guard let bundleID = Bundle.main.bundleIdentifier,
+              patch.bundle_id == bundleID,
+              patch.filename.lowercased().hasSuffix(".3105"),
+              !patch.id.isEmpty,
+              !patch.id.contains("/"), !patch.id.contains("\\"),
+              let url = URL(string: patch.download_url, relativeTo: manifestURL)?.absoluteURL,
+              url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == manifestURL.host?.lowercased(),
+              url.user == nil, url.password == nil else { return nil }
+        guard url.path == manifestURL.path + "/" + patch.id + "/download" else { return nil }
         return url
     }
 
@@ -263,37 +316,20 @@ extension VesperDashRemoteSync {
     }
 }
 
-
-struct NOVARemoteDocument: Decodable, Identifiable, Sendable {
-    let id: Int
-    let filename: String
-    let sizeBytes: Int
-    let updatedAt: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case filename
-        case sizeBytes = "size_bytes"
-        case updatedAt = "updated_at"
-    }
-}
-
-private struct NOVARemoteDocumentManifest: Decodable {
-    let version: Int
-    let files: [NOVARemoteDocument]
-}
-
 struct NOVAStoredDocument: Identifiable, Equatable, Sendable {
-    let id: Int
+    let id: String
     let filename: String
+    let version: String
+    let sha256: String
     let sizeBytes: Int
     let updatedAt: String?
+    let isAvailable: Bool
+    let statusText: String
 
     var isRecentlyUploaded: Bool {
         guard let updatedAt else { return false }
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = fractionalFormatter.date(from: updatedAt) ?? ISO8601DateFormatter().date(from: updatedAt)
+        let date = TimeInterval(updatedAt).map(Date.init(timeIntervalSince1970:))
+            ?? ISO8601DateFormatter().date(from: updatedAt)
         guard let date else { return false }
         let age = Date().timeIntervalSince(date)
         return age >= 0 && age < 7 * 24 * 60 * 60
@@ -307,21 +343,60 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
     @Published private(set) var hasError = false
     @Published private(set) var requiresActivation = false
     @Published private(set) var lastSyncedAt: Date?
-    @Published private(set) var appliedDocumentIDs: Set<Int>
-    @Published private(set) var operatingDocumentIDs = Set<Int>()
-    @Published private(set) var recoveryRequiredDocumentIDs = Set<Int>()
-    @Published private(set) var operationStatusKeys: [Int: String] = [:]
+    @Published private(set) var globalPaused = false
+    @Published private(set) var syncErrorDescription: String?
+    @Published private(set) var appliedDocumentIDs: Set<String>
+    @Published private(set) var operatingDocumentIDs = Set<String>()
+    @Published private(set) var recoveryRequiredDocumentIDs = Set<String>()
+    @Published private(set) var operationStatusKeys: [String: String] = [:]
+    @Published private(set) var operationErrorDescriptions: [String: String] = [:]
 
     private struct ActiveRecord: Codable {
-        let id: Int
+        let id: String
         let projectID: UUID
         let transactionID: UUID?
         let filename: String
         let sizeBytes: Int
         let updatedAt: String?
+        let version: String
+        let sha256: String
 
-        func matches(_ remote: NOVARemoteDocument) -> Bool {
-            filename == remote.filename && sizeBytes == remote.sizeBytes && updatedAt == remote.updatedAt
+        private enum CodingKeys: String, CodingKey {
+            case id, projectID, transactionID, filename, sizeBytes, updatedAt, version, sha256
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            if let stringID = try? values.decode(String.self, forKey: .id) {
+                id = stringID
+            } else {
+                id = String(try values.decode(Int.self, forKey: .id))
+            }
+            projectID = try values.decode(UUID.self, forKey: .projectID)
+            transactionID = try values.decodeIfPresent(UUID.self, forKey: .transactionID)
+            filename = try values.decode(String.self, forKey: .filename)
+            sizeBytes = try values.decode(Int.self, forKey: .sizeBytes)
+            updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt)
+            version = try values.decodeIfPresent(String.self, forKey: .version) ?? ""
+            sha256 = try values.decodeIfPresent(String.self, forKey: .sha256) ?? ""
+        }
+
+        init(id: String, projectID: UUID, transactionID: UUID?, filename: String, sizeBytes: Int, updatedAt: String?, version: String, sha256: String) {
+            self.id = id
+            self.projectID = projectID
+            self.transactionID = transactionID
+            self.filename = filename
+            self.sizeBytes = sizeBytes
+            self.updatedAt = updatedAt
+            self.version = version
+            self.sha256 = sha256
+        }
+
+        func matches(_ remote: RemotePatch) -> Bool {
+            filename == remote.filename && sizeBytes == (remote.size ?? -1)
+                && (updatedAt == remote.updated_at.map(String.init))
+                && (version.isEmpty || version == remote.version)
+                && (sha256.isEmpty || sha256.caseInsensitiveCompare(remote.sha256) == .orderedSame)
         }
     }
 
@@ -330,6 +405,7 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
     private let managedDirectoryName = "NOVAReceivedFiles"
     private let fileManager = FileManager.default
     private var activeRecords: [String: ActiveRecord]
+    private var remotePatchesByID: [String: RemotePatch] = [:]
 
     init() {
         let records = Self.loadActiveRecords()
@@ -379,83 +455,104 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         isSyncing = true
         hasError = false
         requiresActivation = false
+        syncErrorDescription = nil
         defer { isSyncing = false }
 
         do {
-            let manifest = try await fetchManifest(sessionToken: sessionToken)
-            guard manifest.version == 1 else { throw URLError(.cannotParseResponse) }
+            let manifest = try await VesperDashRemoteSync.fetchNOVAPackageManifest(sessionToken: sessionToken)
+            guard manifest.version == 9, let targetBundle = Bundle.main.bundleIdentifier else {
+                throw URLError(.cannotParseResponse)
+            }
+            let remoteFiles = (manifest.all_patches ?? manifest.patches).filter {
+                $0.bundle_id == targetBundle && $0.filename.lowercased().hasSuffix(".3105")
+            }
             let directory = try managedDirectory(createIfNeeded: true)
-            var remoteByID: [Int: NOVARemoteDocument] = [:]
-            for remote in manifest.files {
-                guard remote.id > 0, remoteByID[remote.id] == nil,
-                      remote.sizeBytes > 0, remote.sizeBytes <= maximumFileBytes,
+            var remoteByID: [String: RemotePatch] = [:]
+            for remote in remoteFiles {
+                guard Self.isSafeIdentifier(remote.id), remoteByID[remote.id] == nil,
+                      let size = remote.size, size > 0, size <= maximumFileBytes,
+                      remote.sha256.count == 64,
+                      remote.sha256.allSatisfy({ $0.isHexDigit }),
                       Self.isSafeFilename(remote.filename) else {
                     throw URLError(.cannotParseResponse)
                 }
                 remoteByID[remote.id] = remote
             }
+            globalPaused = manifest.global_paused
+            remotePatchesByID = remoteByID
 
             var expectedNames = Set<String>()
-            var storedByID: [Int: NOVAStoredDocument] = [:]
+            var storedByID: [String: NOVAStoredDocument] = [:]
             for record in Array(activeRecords.values) {
                 let remote = remoteByID[record.id]
-                if let remote, record.matches(remote) {
+                if let remote, record.matches(remote), Self.isAvailable(remote, globalPaused: manifest.global_paused) {
                     do {
                         try await reconcile(record)
                         operationStatusKeys.removeValue(forKey: record.id)
-                        if activeRecords[String(record.id)] != nil {
+                        operationErrorDescriptions.removeValue(forKey: record.id)
+                        if activeRecords[record.id] != nil {
                             expectedNames.insert(Self.localName(id: record.id, filename: record.filename))
-                            storedByID[record.id] = Self.stored(record)
+                            storedByID[record.id] = Self.stored(remote, globalPaused: manifest.global_paused)
                         }
                     } catch {
                         operationStatusKeys[record.id] = Self.statusKey(for: error)
+                        operationErrorDescriptions[record.id] = error.localizedDescription
+                        recoveryRequiredDocumentIDs.insert(record.id)
                         expectedNames.insert(Self.localName(id: record.id, filename: record.filename))
-                        storedByID[record.id] = Self.stored(record)
+                        storedByID[record.id] = Self.stored(remote, globalPaused: manifest.global_paused)
                     }
                 } else {
                     do {
                         try await restore(record)
-                        activeRecords.removeValue(forKey: String(record.id))
+                        activeRecords.removeValue(forKey: record.id)
                         appliedDocumentIDs.remove(record.id)
                         recoveryRequiredDocumentIDs.remove(record.id)
                         operationStatusKeys.removeValue(forKey: record.id)
+                        operationErrorDescriptions.removeValue(forKey: record.id)
                         persistActiveRecords()
                     } catch {
                         operationStatusKeys[record.id] = Self.statusKey(for: error)
+                        operationErrorDescriptions[record.id] = error.localizedDescription
+                        recoveryRequiredDocumentIDs.insert(record.id)
                         expectedNames.insert(Self.localName(id: record.id, filename: record.filename))
-                        storedByID[record.id] = Self.stored(record)
+                        storedByID[record.id] = remote.map { Self.stored($0, globalPaused: manifest.global_paused) } ?? Self.stored(record)
                     }
                 }
             }
 
-            for remote in manifest.files {
+            for remote in remoteFiles {
+                let item = Self.stored(remote, globalPaused: manifest.global_paused)
                 let localName = Self.localName(id: remote.id, filename: remote.filename)
                 let destination = directory.appendingPathComponent(localName, isDirectory: false)
-                if !(try hasValidCachedFile(at: destination, expectedSize: remote.sizeBytes)) {
-                    let data = try await download(remote, sessionToken: sessionToken)
-                    guard data.count == remote.sizeBytes, data.count <= maximumFileBytes else {
-                        throw URLError(.cannotParseResponse)
+                if item.isAvailable {
+                    if !(try hasValidCachedFile(at: destination, expectedSize: item.sizeBytes)) {
+                        let data = try await download(remote, sessionToken: sessionToken)
+                        guard data.count == item.sizeBytes, data.count <= maximumFileBytes,
+                              VesperDashDigest.hex(data).caseInsensitiveCompare(remote.sha256) == .orderedSame else {
+                            throw URLError(.cannotParseResponse)
+                        }
+                        try data.write(to: destination, options: .atomic)
                     }
-                    try data.write(to: destination, options: .atomic)
+                    expectedNames.insert(localName)
                 }
-                expectedNames.insert(localName)
-                storedByID[remote.id] = NOVAStoredDocument(
-                    id: remote.id, filename: remote.filename,
-                    sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt
-                )
+                storedByID[remote.id] = item
             }
 
             try removeStaleManagedFiles(in: directory, retaining: expectedNames)
             operationStatusKeys = operationStatusKeys.filter { storedByID[$0.key] != nil }
+            operationErrorDescriptions = operationErrorDescriptions.filter { storedByID[$0.key] != nil }
             files = storedByID.values.sorted { $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending }
             lastSyncedAt = Date()
             hasError = !operationStatusKeys.isEmpty
+            syncErrorDescription = nil
             requiresActivation = false
         } catch let error as ManifestHTTPError {
             hasError = true
             requiresActivation = error.statusCode == 401 || error.statusCode == 403
+            syncErrorDescription = error.localizedDescription
         } catch {
             hasError = true
+            syncErrorDescription = error.localizedDescription
         }
     }
 
@@ -465,6 +562,7 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         if shouldApply == appliedDocumentIDs.contains(id) { return }
         operatingDocumentIDs.insert(id)
         operationStatusKeys.removeValue(forKey: id)
+        operationErrorDescriptions.removeValue(forKey: id)
         defer { operatingDocumentIDs.remove(id) }
 
         do {
@@ -473,20 +571,22 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
                 try await apply(document, sessionToken: sessionToken)
                 appliedDocumentIDs.insert(id)
                 operationStatusKeys.removeValue(forKey: id)
+                operationErrorDescriptions.removeValue(forKey: id)
             } else {
-                guard let record = activeRecords[String(id)] else {
+                guard let record = activeRecords[id] else {
                     appliedDocumentIDs.remove(id)
                     return
                 }
                 try await restore(record)
-                activeRecords.removeValue(forKey: String(id))
+                activeRecords.removeValue(forKey: id)
                 persistActiveRecords()
                 appliedDocumentIDs.remove(id)
                 recoveryRequiredDocumentIDs.remove(id)
                 operationStatusKeys.removeValue(forKey: id)
+                operationErrorDescriptions.removeValue(forKey: id)
             }
         } catch {
-            if let record = activeRecords[String(id)] {
+            if let record = activeRecords[id] {
                 let exact = record.transactionID.flatMap {
                     DevicePatchService.receipt(
                         projectID: record.projectID, transactionID: $0,
@@ -509,6 +609,7 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
                 if prepared { recoveryRequiredDocumentIDs.insert(id) }
             }
             operationStatusKeys[id] = Self.statusKey(for: error)
+            operationErrorDescriptions[id] = error.localizedDescription
         }
     }
 
@@ -521,13 +622,15 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         for record in Array(activeRecords.values) {
             do {
                 try await restore(record)
-                activeRecords.removeValue(forKey: String(record.id))
+                activeRecords.removeValue(forKey: record.id)
                 appliedDocumentIDs.remove(record.id)
                 recoveryRequiredDocumentIDs.remove(record.id)
                 operationStatusKeys.removeValue(forKey: record.id)
+                operationErrorDescriptions.removeValue(forKey: record.id)
             } catch {
                 keepNames.insert(Self.localName(id: record.id, filename: record.filename))
                 operationStatusKeys[record.id] = Self.statusKey(for: error)
+                operationErrorDescriptions[record.id] = error.localizedDescription
             }
         }
         persistActiveRecords()
@@ -541,15 +644,18 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         lastSyncedAt = nil
     }
 
-    private func apply(_ remote: NOVAStoredDocument, sessionToken: String) async throws {
-        guard remote.filename.lowercased().hasSuffix(".3105") else {
-            throw PatchPackageError.unsupportedFormat
+    private func apply(_ document: NOVAStoredDocument, sessionToken: String) async throws {
+        guard document.filename.lowercased().hasSuffix(".3105"),
+              document.isAvailable,
+              let remote = remotePatchesByID[document.id],
+              remote.bundle_id == Bundle.main.bundleIdentifier,
+              document.version == remote.version,
+              document.sha256.caseInsensitiveCompare(remote.sha256) == .orderedSame else {
+            throw PatchPackageError.remoteImportFailed
         }
-        let data = try await download(
-            NOVARemoteDocument(id: remote.id, filename: remote.filename, sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt),
-            sessionToken: sessionToken
-        )
-        guard data.count == remote.sizeBytes, data.count <= maximumFileBytes else {
+        let data = try await download(remote, sessionToken: sessionToken)
+        guard data.count == document.sizeBytes, data.count <= maximumFileBytes,
+              VesperDashDigest.hex(data).caseInsensitiveCompare(remote.sha256) == .orderedSame else {
             throw PatchPackageError.sizeLimitExceeded
         }
         _ = try PatchPackageCodec.inspect(data)
@@ -563,20 +669,22 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
 
         let record = ActiveRecord(
             id: remote.id, projectID: project.id, transactionID: nil, filename: remote.filename,
-            sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt
+            sizeBytes: document.sizeBytes, updatedAt: Self.updatedAtToken(remote.updated_at),
+            version: remote.version, sha256: remote.sha256
         )
         guard !activeRecords.values.contains(where: { $0.projectID == project.id && $0.id != remote.id }) else {
             throw PatchPackageError.duplicateTarget
         }
-        activeRecords[String(remote.id)] = record
+        activeRecords[remote.id] = record
         persistActiveRecords()
         do {
             let receipt = try await Task.detached(priority: .userInitiated) {
                 try DevicePatchService.applyNOVAPackage(project: project)
             }.value
-            activeRecords[String(remote.id)] = ActiveRecord(
+            activeRecords[remote.id] = ActiveRecord(
                 id: remote.id, projectID: project.id, transactionID: receipt.id,
-                filename: remote.filename, sizeBytes: remote.sizeBytes, updatedAt: remote.updatedAt
+                filename: remote.filename, sizeBytes: document.sizeBytes,
+                updatedAt: Self.updatedAtToken(remote.updated_at), version: remote.version, sha256: remote.sha256
             )
             persistActiveRecords()
         } catch {
@@ -587,13 +695,13 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
                     try await Task.detached(priority: .userInitiated) {
                         try DevicePatchService.restoreNOVAPackage(receipt: prepared)
                     }.value
-                    activeRecords.removeValue(forKey: String(remote.id))
+                    activeRecords.removeValue(forKey: remote.id)
                     persistActiveRecords()
                 } catch {
                     recoveryRequiredDocumentIDs.insert(remote.id)
                 }
             } else {
-                activeRecords.removeValue(forKey: String(remote.id))
+                activeRecords.removeValue(forKey: remote.id)
                 persistActiveRecords()
             }
             throw error
@@ -614,7 +722,7 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
                 try await Task.detached(priority: .userInitiated) {
                     try DevicePatchService.restoreNOVAPackage(receipt: prepared)
                 }.value
-                activeRecords.removeValue(forKey: String(record.id))
+                activeRecords.removeValue(forKey: record.id)
                 appliedDocumentIDs.remove(record.id)
                 recoveryRequiredDocumentIDs.remove(record.id)
                 persistActiveRecords()
@@ -630,7 +738,7 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
             recoveryRequiredDocumentIDs.insert(record.id)
             throw PatchPackageError.restoreFailed
         }
-        activeRecords.removeValue(forKey: String(record.id))
+        activeRecords.removeValue(forKey: record.id)
         appliedDocumentIDs.remove(record.id)
         recoveryRequiredDocumentIDs.remove(record.id)
         persistActiveRecords()
@@ -688,10 +796,45 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         return records
     }
 
-    private static func localName(id: Int, filename: String) -> String { "\(id)__\(filename)" }
+    private static func localName(id: String, filename: String) -> String { "\(id)__\(filename)" }
 
     private static func stored(_ record: ActiveRecord) -> NOVAStoredDocument {
-        NOVAStoredDocument(id: record.id, filename: record.filename, sizeBytes: record.sizeBytes, updatedAt: record.updatedAt)
+        NOVAStoredDocument(
+            id: record.id, filename: record.filename, sizeBytes: record.sizeBytes,
+            updatedAt: record.updatedAt, version: record.version, sha256: record.sha256,
+            isAvailable: false, statusText: ""
+        )
+    }
+
+    private static func stored(_ remote: RemotePatch, globalPaused: Bool) -> NOVAStoredDocument {
+        let available = isAvailable(remote, globalPaused: globalPaused)
+        let status: String
+        if globalPaused || remote.paused || !remote.enabled {
+            status = remote.displayStatusText.isEmpty ? "Maintenance" : remote.displayStatusText
+        } else {
+            status = remote.displayStatusText.isEmpty ? "Available" : remote.displayStatusText
+        }
+        return NOVAStoredDocument(
+            id: remote.id, filename: remote.filename, sizeBytes: remote.size ?? 0,
+            updatedAt: updatedAtToken(remote.updated_at), version: remote.version,
+            sha256: remote.sha256, isAvailable: available, statusText: status
+        )
+    }
+
+    private static func isAvailable(_ remote: RemotePatch, globalPaused: Bool) -> Bool {
+        !globalPaused && remote.enabled && !remote.paused
+    }
+
+    private static func updatedAtToken(_ timestamp: Int?) -> String? {
+        guard let timestamp else { return nil }
+        return String(timestamp)
+    }
+
+    private static func isSafeIdentifier(_ identifier: String) -> Bool {
+        !identifier.isEmpty && identifier.utf8.count <= 128
+            && identifier != "." && identifier != ".."
+            && !identifier.contains("/") && !identifier.contains("\\")
+            && !identifier.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
 
     private static func statusKey(for error: Error) -> String {
@@ -710,44 +853,15 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
         return "nova.files.apply_failed"
     }
 
-    private func fetchManifest(sessionToken: String) async throws -> NOVARemoteDocumentManifest {
-        var request = URLRequest(url: try documentsURL())
-        request.httpMethod = "GET"
-        request.timeoutInterval = 20
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else { throw ManifestHTTPError(statusCode: http.statusCode) }
-        return try JSONDecoder().decode(NOVARemoteDocumentManifest.self, from: data)
-    }
-
-    private func download(_ remote: NOVARemoteDocument, sessionToken: String) async throws -> Data {
-        var request = URLRequest(url: try documentDownloadURL(id: remote.id))
-        request.httpMethod = "GET"
-        request.timeoutInterval = 120
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else { throw ManifestHTTPError(statusCode: http.statusCode) }
-        let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased().split(separator: ";", maxSplits: 1).first
-        guard contentType == "application/octet-stream" else { throw URLError(.cannotParseResponse) }
-        return data
-    }
-
-    private func documentsURL() throws -> URL {
-        try apiBaseURL().appendingPathComponent("client", isDirectory: true)
-            .appendingPathComponent("documents", isDirectory: false)
-    }
-
-    private func documentDownloadURL(id: Int) throws -> URL {
-        try apiBaseURL().appendingPathComponent("client", isDirectory: true)
-            .appendingPathComponent("documents", isDirectory: true)
-            .appendingPathComponent(String(id), isDirectory: true)
-            .appendingPathComponent("download", isDirectory: false)
+    private func download(_ remote: RemotePatch, sessionToken: String) async throws -> Data {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NOVA-package-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let fileURL = try await VesperDashRemoteSync.downloadNOVAPackageFile(
+            for: remote, sessionToken: sessionToken, using: .shared, into: directory
+        )
+        return try Data(contentsOf: fileURL, options: [.mappedIfSafe])
     }
 
     private func apiBaseURL() throws -> URL {
@@ -795,9 +909,9 @@ final class NOVARemoteDocumentSyncStore: ObservableObject {
 
     private static func isManagedFilename(_ name: String) -> Bool {
         guard let separator = name.range(of: "__") else { return false }
-        let identifier = name[..<separator.lowerBound]
-        let filename = name[separator.upperBound...]
-        return !filename.isEmpty && identifier.allSatisfy { $0.isNumber } && Int(identifier) != nil
+        let identifier = String(name[..<separator.lowerBound])
+        let filename = String(name[separator.upperBound...])
+        return isSafeIdentifier(identifier) && isSafeFilename(filename)
     }
 
     private static func isSafeFilename(_ rawName: String) -> Bool {
@@ -875,9 +989,17 @@ struct NOVAReceivedDocumentsCard: View {
                         .font(.system(size: 9, weight: .semibold, design: .rounded))
                         .foregroundStyle(NOVAControlPalette.red.opacity(0.94))
                 } else if store.hasError {
-                    Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .foregroundStyle(NOVAControlPalette.red.opacity(0.94))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(NOVAControlPalette.red.opacity(0.94))
+                        if let detail = store.syncErrorDescription {
+                            Text(detail)
+                                .font(.system(size: 8, weight: .medium, design: .rounded))
+                                .foregroundStyle(NOVAControlPalette.red.opacity(0.82))
+                                .lineLimit(2)
+                        }
+                    }
                 }
 
                 if store.files.isEmpty && !store.isSyncing {
@@ -971,6 +1093,7 @@ struct NOVAReceivedDocumentsCard: View {
         let isBusy = store.operatingDocumentIDs.contains(file.id)
         let needsRecovery = store.recoveryRequiredDocumentIDs.contains(file.id)
         let statusKey = store.operationStatusKeys[file.id]
+        let operationError = store.operationErrorDescriptions[file.id]
 
         return VStack(alignment: .leading, spacing: 8) {
             if file.isRecentlyUploaded {
@@ -994,6 +1117,10 @@ struct NOVAReceivedDocumentsCard: View {
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .textSelection(.enabled)
+                    Text("\(appLanguage.text("nova.files.version")) \(file.version) • \(file.statusText)")
+                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                        .foregroundStyle(file.isAvailable ? NOVAControlPalette.green : NOVAControlPalette.amber)
+                        .lineLimit(2)
                     Text(ByteCountFormatter.string(fromByteCount: Int64(file.sizeBytes), countStyle: .file))
                         .font(.system(size: 8, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.52))
@@ -1014,24 +1141,34 @@ struct NOVAReceivedDocumentsCard: View {
                     Text(appLanguage.text("nova.files.toggle_hint"))
                 }
                 .labelsHidden()
-                .tint(NOVAControlPalette.red)
+                .tint(NOVAControlPalette.green)
                 .accessibilityLabel(Text(appLanguage.text("nova.files.toggle_hint")))
-                .disabled(isBusy || needsRecovery || store.isSyncing || (!licenseManager.isActive && !isApplied))
+                .disabled(isBusy || needsRecovery || store.isSyncing || (!file.isAvailable && !isApplied) || (!licenseManager.isActive && !isApplied))
             }
-            let stateKey = statusKey ?? (needsRecovery ? "nova.files.recovery_required" : (isBusy ? "nova.files.processing" : (isApplied ? "nova.files.applied" : "nova.files.not_applied")))
+            let stateKey = statusKey ?? (needsRecovery ? "nova.files.recovery_required" : (isBusy ? "nova.files.processing" : (isApplied ? "nova.files.applied" : (file.isAvailable ? "nova.files.not_applied" : "nova.files.unavailable"))))
+            let stateColor = statusKey != nil || needsRecovery ? NOVAControlPalette.red : (isApplied ? NOVAControlPalette.green : (file.isAvailable ? .white.opacity(0.55) : NOVAControlPalette.amber))
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(needsRecovery || statusKey != nil || isApplied ? NOVAControlPalette.red : .white.opacity(0.35))
+                    .fill(stateColor)
                     .frame(width: 3, height: 10)
-            Text(appLanguage.text(stateKey))
-                .font(.system(size: 7, weight: .bold, design: .rounded))
-                    .foregroundStyle(needsRecovery || statusKey != nil || isApplied ? NOVAControlPalette.red : .white.opacity(0.55))
+                Text(appLanguage.text(stateKey))
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(stateColor)
+                if let operationError, !operationError.isEmpty {
+                    Text(operationError)
+                        .font(.system(size: 7, weight: .medium, design: .rounded))
+                        .foregroundStyle(NOVAControlPalette.red.opacity(0.9))
+                        .lineLimit(2)
+                }
             }
         }
         .padding(10)
         .background(NOVAControlPalette.black.opacity(0.82))
         .clipShape(NOVAChamferedShape(cut: 10))
-        .overlay(NOVAChamferedShape(cut: 10).stroke(isApplied ? NOVAControlPalette.red.opacity(0.52) : .white.opacity(0.13), lineWidth: 1))
+        .overlay(NOVAChamferedShape(cut: 10).stroke(
+            needsRecovery || statusKey != nil ? NOVAControlPalette.red.opacity(0.72) : (isApplied ? NOVAControlPalette.green.opacity(0.58) : .white.opacity(0.13)),
+            lineWidth: 1
+        ))
     }
 
     private func syncNow() {
@@ -1044,6 +1181,8 @@ struct NOVAReceivedDocumentsCard: View {
 private enum NOVAControlPalette {
     static let red = Color(red: 0.94, green: 0.12, blue: 0.20)
     static let deepRed = Color(red: 0.36, green: 0.035, blue: 0.07)
+    static let green = Color(red: 0.20, green: 0.88, blue: 0.49)
+    static let amber = Color(red: 1.00, green: 0.69, blue: 0.20)
     static let black = Color(red: 0.025, green: 0.026, blue: 0.032)
     static let panel = Color(red: 0.045, green: 0.043, blue: 0.052)
 }

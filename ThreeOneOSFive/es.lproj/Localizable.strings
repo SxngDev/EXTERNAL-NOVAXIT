@@ -88,6 +88,8 @@
 "nova.files.visible" = "MOSTRADO EN ESTA VISTA";
 "nova.files.hidden" = "OCULTO EN ESTA VISTA";
 "nova.files.apply_notice" = "Solo se aceptan paquetes 3105PATCH válidos dirigidos exclusivamente a NOVA.";
+"nova.files.version" = "VERSIÓN";
+"nova.files.unavailable" = "NO DISPONIBLE · MANTENIMIENTO";
 "nova.files.applied" = "APLICADO EN NOVA";
 "nova.files.not_applied" = "RESTAURADO · SIN APLICAR";
 "nova.files.processing" = "PROCESANDO TRANSACCIÓN…";

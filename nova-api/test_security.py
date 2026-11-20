@@ -1,5 +1,6 @@
 """Security regression tests for NOVA-generated licenses and client sessions."""
 import hashlib
+from io import BytesIO
 import json
 import os
 import shutil
@@ -77,6 +78,62 @@ class NovaLicenseTests(unittest.TestCase):
         response = self.client.post("/api/license/verify", json={"key": key, "device_id": "nova-device-00000001"})
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["status"], "expired")
+
+    def _client_package_session(self):
+        key = self._generate()
+        return self.client.post(
+            "/api/license/verify",
+            json={"key": key, "device_id": "nova-device-contract"},
+        ).get_json()["client_session"]
+
+    def _insert_patch(self, patch_id, game, bundle_id, category="nova", enabled=1, paused=0):
+        conn = server.db()
+        now = 1_700_000_000
+        conn.execute(
+            """INSERT INTO patches
+               (id,name,owner,category,game,bundle_id,target_path,target_paths,filename,stored_filename,sha256,size,
+                enabled,paused,version,image_filename,status_text,sort_order,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (patch_id, patch_id, "nova", category, game, bundle_id, "", "[]", patch_id + ".3105",
+             patch_id + ".3105", "a" * 64, 10, enabled, paused, "1.2", "", "READY", 1, now, now),
+        )
+        conn.commit(); conn.close()
+        server.PATCH_DIR.mkdir(parents=True, exist_ok=True)
+        (server.PATCH_DIR / (patch_id + ".3105")).write_bytes(b"3105PATCH\x00")
+
+    def test_catalog_nova_filters_exact_bundle_and_default_excludes_it(self):
+        token = self._client_package_session()
+        self._insert_patch("nova-valid", "nova", server.NOVA_SELF_BUNDLE_ID)
+        self._insert_patch("game-valid", "normal", "com.dts.freefireth", category="aim")
+        headers = {"Authorization": f"Bearer {token}"}
+        nova = self.client.get("/api/patches?catalog=nova", headers=headers)
+        ordinary = self.client.get("/api/patches", headers=headers)
+        self.assertEqual(nova.status_code, 200)
+        self.assertEqual([p["id"] for p in nova.get_json()["all_patches"]], ["nova-valid"])
+        self.assertEqual(ordinary.status_code, 200)
+        self.assertEqual([p["id"] for p in ordinary.get_json()["all_patches"]], ["game-valid"])
+
+    def test_upload_rejects_mismatched_nova_category_or_bundle(self):
+        payload = {"id":"invalid-nova", "name":"Invalid NOVA", "game":"nova", "bundle_id":server.NOVA_SELF_BUNDLE_ID,
+                   "category":"aim", "version":"1", "file":( BytesIO(b"3105PATCH\x00"), "bad.3105")}
+        response = self.client.post("/api/admin/patches", data=payload, content_type="multipart/form-data")
+        self.assertEqual(response.status_code, 400)
+        payload["category"] = "nova"
+        payload["bundle_id"] = "com.dts.freefireth"
+        payload["file"] = (BytesIO(b"3105PATCH\x00"), "bad.3105")
+        response = self.client.post("/api/admin/patches", data=payload, content_type="multipart/form-data")
+        self.assertEqual(response.status_code, 400)
+
+    def test_nova_download_requires_client_auth_and_returns_package(self):
+        self._insert_patch("nova-download", "nova", server.NOVA_SELF_BUNDLE_ID)
+        anonymous = server.app.test_client().get("/api/patches/nova-download/download")
+        self.assertEqual(anonymous.status_code, 401)
+        anonymous.close()
+        token = self._client_package_session()
+        response = self.client.get("/api/patches/nova-download/download", headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"3105PATCH\x00")
+        response.close()
 
     def test_admin_routes_require_authentication(self):
         anonymous = server.app.test_client()

@@ -31,8 +31,10 @@ SESSION_TTL = int(os.environ.get("NOVA_SESSION_TTL", str(7 * 24 * 60 * 60)))
 CLIENT_SESSION_TTL = int(os.environ.get("NOVA_CLIENT_SESSION_TTL", str(60 * 60)))
 NOVA_PACKAGE_PASSWORDS = os.environ.get("NOVA_PACKAGE_PASSWORDS", "")
 MAX_UPLOAD = int(os.environ.get("NOVA_MAX_UPLOAD", str(80 * 1024 * 1024)))
-ALLOWED_BUNDLES = {"com.dts.freefireth", "com.dts.freefiremax"}
-ALLOWED_CATEGORIES = {"aim", "esp", "body", "weapons", "hologram", "skin"}
+NOVA_SELF_BUNDLE_ID = "com.apple.mobile.MobileHouseArrest"
+GAME_BUNDLES = {"com.dts.freefireth", "com.dts.freefiremax"}
+ALLOWED_BUNDLES = GAME_BUNDLES | {NOVA_SELF_BUNDLE_ID}
+ALLOWED_CATEGORIES = {"aim", "esp", "body", "weapons", "hologram", "skin", "nova"}
 NOVA_IPA_DOWNLOAD_URL = os.environ.get("NOVA_IPA_DOWNLOAD_URL", "https://github.com/vogarf816-debug/extrenal/releases/latest/download/NOVA-Build-49-unsigned.ipa")
 
 app = Flask(__name__, static_folder=str(ROOT / "static"), static_url_path="/static")
@@ -648,10 +650,13 @@ def server_package_passwords(tenant):
 @client_auth_required
 def list_patches():
     conn = db(); scope = requested_tenant(); paused = global_paused(conn, scope)
+    nova_catalog = request.args.get("catalog") == "nova"
+    bundle_clause = "bundle_id=?" if nova_catalog else "bundle_id<>?"
+    bundle_value = NOVA_SELF_BUNDLE_ID
     if is_superuser() and request.args.get("tenant") is None:
-        rows = conn.execute("SELECT * FROM patches ORDER BY category, game, sort_order, name").fetchall()
+        rows = conn.execute(f"SELECT * FROM patches WHERE {bundle_clause} ORDER BY category, game, sort_order, name", (bundle_value,)).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM patches WHERE owner=? ORDER BY category, game, sort_order, name", (scope,)).fetchall()
+        rows = conn.execute(f"SELECT * FROM patches WHERE owner=? AND {bundle_clause} ORDER BY category, game, sort_order, name", (scope, bundle_value)).fetchall()
     conn.close()
     all_patches = [public_row(r) for r in rows]
     active_patches = [] if paused else [p for p in all_patches if p["enabled"] and not p["paused"]]
@@ -730,9 +735,19 @@ def upload_patch():
         if path and path not in target_paths:
             target_paths.append(path)
     bundle = request.form["bundle_id"]
-    if bundle not in ALLOWED_BUNDLES: return jsonify(error="unsupported bundle_id"), 400
+    game = request.form["game"].strip().lower()
     category = request.form.get("category", "aim").lower()
     if category not in ALLOWED_CATEGORIES: return jsonify(error="unsupported category"), 400
+    if game == "nova":
+        if bundle != NOVA_SELF_BUNDLE_ID or category != "nova":
+            return jsonify(error="NOVA packages must use the NOVA category and this app's bundle only"), 400
+    elif game in {"normal", "max"}:
+        expected_bundle = "com.dts.freefiremax" if game == "max" else "com.dts.freefireth"
+        if bundle != expected_bundle or category == "nova":
+            return jsonify(error="game and bundle_id do not match"), 400
+    else:
+        return jsonify(error="unsupported package target"), 400
+    if bundle not in ALLOWED_BUNDLES: return jsonify(error="unsupported bundle_id"), 400
     status_text = request.form.get("status_text", "NO STATUS").strip() or "NO STATUS"
     if len(status_text) > 120: return jsonify(error="status text is limited to 120 characters"), 400
     try: sort_order = int(request.form.get("sort_order", "1000"))
@@ -777,7 +792,7 @@ def upload_patch():
         return jsonify(error="patch id belongs to another tenant"), 409
     conn.execute("""INSERT INTO patches(id,name,owner,category,game,bundle_id,target_path,target_paths,filename,stored_filename,sha256,size,version,image_filename,status_text,sort_order,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,owner=excluded.owner,category=excluded.category,game=excluded.game,bundle_id=excluded.bundle_id,target_path=excluded.target_path,target_paths=excluded.target_paths,filename=excluded.filename,stored_filename=excluded.stored_filename,sha256=excluded.sha256,size=excluded.size,version=excluded.version,image_filename=CASE WHEN excluded.image_filename != '' THEN excluded.image_filename ELSE patches.image_filename END,status_text=excluded.status_text,sort_order=excluded.sort_order,updated_at=excluded.updated_at""",
-        (patch_id, request.form["name"], owner, category, request.form["game"], bundle, target_paths[0] if target_paths else "", json.dumps(target_paths), filename, stored, digest, len(raw), request.form["version"], image_filename, status_text, sort_order, now, now))
+        (patch_id, request.form["name"], owner, category, game, bundle, target_paths[0] if target_paths else "", json.dumps(target_paths), filename, stored, digest, len(raw), request.form["version"], image_filename, status_text, sort_order, now, now))
     conn.commit(); row = conn.execute("SELECT * FROM patches WHERE id=? AND owner=?", (patch_id, owner)).fetchone(); conn.close()
     return jsonify(patch=public_row(row)), 201
 
