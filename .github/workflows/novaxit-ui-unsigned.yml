@@ -1,0 +1,52 @@
+name: Build NOVAXIT UI-only unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ui/novaxit-visual-refresh
+    paths:
+      - "NOVAXIT-Preview/**"
+      - "ThreeOneOSFive/views/NOVAXITVisualDashboard.swift"
+      - ".github/workflows/novaxit-ui-unsigned.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ui-only:
+    runs-on: macos-15
+    steps:
+      - name: Checkout UI preview sources
+        uses: actions/checkout@v4
+
+      - name: Build standalone SwiftUI preview (unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project NOVAXIT-Preview/NOVAXITPreview.xcodeproj \
+            -scheme NOVAXITPreview \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/NOVAXITPreview.app"
+          test -d "$APP_PATH"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && ditto -c -k --sequesterRsrc --keepParent Payload NOVAXIT-UI-unsigned.ipa)
+          test -s build/NOVAXIT-UI-unsigned.ipa
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVAXIT-UI-unsigned-IPA
+          path: build/NOVAXIT-UI-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
