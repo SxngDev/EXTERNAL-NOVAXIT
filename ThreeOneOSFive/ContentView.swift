@@ -821,46 +821,57 @@ struct ContentView: View {
     }
 
     private var brandHeader: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 13) {
             Image("SAKKExternalLogo")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 54, height: 54)
-                .background(AppTheme.pageBackground, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(AppTheme.secondaryAccent.opacity(0.72), lineWidth: 1))
-            VStack(alignment: .leading, spacing: 3) {
+                .frame(width: 50, height: 50)
+                .padding(5)
+                .background(AppTheme.pageBackground.opacity(0.9), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AppTheme.secondaryAccent.opacity(0.62), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 5) {
                 Text("NOVA")
-                    .font(.system(size: 18, weight: .black, design: .rounded))
-                    .tracking(0.5)
+                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .tracking(1.1)
                     .foregroundStyle(AppTheme.paper)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.68)
-                Text("NOVA • OFFICIAL INFO")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(0.6)
-                    .foregroundStyle(AppTheme.accent)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(AppTheme.secondaryAccent)
+                        .frame(width: 5, height: 5)
+                    Text("OFFICIAL INTERFACE")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .tracking(1.05)
+                        .foregroundStyle(AppTheme.secondaryAccent)
+                        .lineLimit(1)
+                }
             }
 
-            Spacer()
-            ZStack {
-                Circle().fill(AppTheme.accent.opacity(0.16)).frame(width: 54, height: 54).blur(radius: 9)
-                Image(systemName: "bolt.horizontal.fill")
-                    .font(.system(size: 22, weight: .black))
-                    .foregroundStyle(AppTheme.accent)
-                    .frame(width: 46, height: 46)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay(Circle().stroke(AppTheme.accent.opacity(0.65), lineWidth: 1))
-                    .shadow(color: AppTheme.accent.opacity(0.45), radius: 12)
-            }
+            Spacer(minLength: 8)
+
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 19, weight: .black))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 42, height: 42)
+                .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.accent.opacity(0.5), lineWidth: 1))
+                .shadow(color: AppTheme.accent.opacity(0.22), radius: 10, y: 3)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(AppTheme.accent.opacity(0.28), lineWidth: 1))
-        .shadow(color: AppTheme.accent.opacity(0.14), radius: 18, y: 7)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 11)
+        .background(
+            LinearGradient(
+                colors: [AppTheme.referenceCard.opacity(0.96), AppTheme.ink.opacity(0.88)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 21, style: .continuous)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 21, style: .continuous).stroke(AppTheme.secondaryAccent.opacity(0.24), lineWidth: 1))
+        .shadow(color: AppTheme.accent.opacity(0.12), radius: 15, y: 6)
     }
 
     private var devicePanel: some View {
