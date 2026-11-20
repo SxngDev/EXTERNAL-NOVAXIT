@@ -1,0 +1,56 @@
+// !$*UTF8*$!
+{
+  archiveVersion = 1;
+  classes = {};
+  objectVersion = 56;
+  objects = {
+    A10000000000000000000001 /* Project object */ = {
+      isa = PBXProject;
+      attributes = { BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1600; };
+      buildConfigurationList = A10000000000000000000008;
+      compatibilityVersion = "Xcode 14.0";
+      developmentRegion = en;
+      mainGroup = A10000000000000000000002;
+      productRefGroup = A10000000000000000000004;
+      projectDirPath = "";
+      projectRoot = "";
+      targets = (A10000000000000000000003,);
+    };
+    A10000000000000000000002 /* Main Group */ = {
+      isa = PBXGroup;
+      children = (A10000000000000000000005, A10000000000000000000006, A10000000000000000000007, A10000000000000000000004,);
+      sourceTree = "<group>";
+    };
+    A10000000000000000000004 /* Products */ = {
+      isa = PBXGroup;
+      children = (A10000000000000000000009,);
+      name = Products;
+      sourceTree = "<group>";
+    };
+    A10000000000000000000005 /* PreviewApp.swift */ = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewApp.swift; sourceTree = "<group>"; };
+    A10000000000000000000006 /* NOVAXITVisualDashboard.swift */ = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NOVAXITVisualDashboard.swift; path = ../ThreeOneOSFive/views/NOVAXITVisualDashboard.swift; sourceTree = "<group>"; };
+    A10000000000000000000007 /* Info.plist */ = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+    A10000000000000000000009 /* NOVAXITPreview.app */ = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NOVAXITPreview.app; sourceTree = BUILT_PRODUCTS_DIR; };
+    A1000000000000000000000A /* Sources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000B, A1000000000000000000000C,); runOnlyForDeploymentPostprocessing = 0; };
+    A1000000000000000000000B /* PreviewApp.swift in Sources */ = { isa = PBXBuildFile; fileRef = A10000000000000000000005; };
+    A1000000000000000000000C /* Dashboard in Sources */ = { isa = PBXBuildFile; fileRef = A10000000000000000000006; };
+    A10000000000000000000003 /* NOVAXITPreview */ = {
+      isa = PBXNativeTarget;
+      buildConfigurationList = A1000000000000000000000D;
+      buildPhases = (A1000000000000000000000A,);
+      buildRules = ();
+      dependencies = ();
+      name = NOVAXITPreview;
+      productName = NOVAXITPreview;
+      productReference = A10000000000000000000009;
+      productType = "com.apple.product-type.application";
+    };
+    A10000000000000000000008 /* Project config list */ = { isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000E, A1000000000000000000000F,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+    A1000000000000000000000D /* Target config list */ = { isa = XCConfigurationList; buildConfigurations = (A10000000000000000000010, A10000000000000000000011,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+    A1000000000000000000000E /* Project Debug */ = { isa = XCBuildConfiguration; buildSettings = { SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Debug; };
+    A1000000000000000000000F /* Project Release */ = { isa = XCBuildConfiguration; buildSettings = { SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Release; };
+    A10000000000000000000010 /* Target Debug */ = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = NOVAXIT; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.novaxit.preview; PRODUCT_NAME = NOVAXITPreview; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_VERSION = 5.0; }; name = Debug; };
+    A10000000000000000000011 /* Target Release */ = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = NOVAXIT; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.novaxit.preview; PRODUCT_NAME = NOVAXITPreview; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_VERSION = 5.0; }; name = Release; };
+  };
+  rootObject = A10000000000000000000001;
+}
