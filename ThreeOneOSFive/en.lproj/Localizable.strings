@@ -536,7 +536,10 @@
 "vesper.loading.resources" = "DOWNLOAD RESOURCE FROM SERVER";
 "vesper.tab.more" = "MORE";
 "nova.files.title" = "NOVA";
-"nova.files.subtitle" = "NOVA CONTENT";
+"nova.files.subtitle" = "PACKAGE MANAGER";
+"nova.files.tile.package" = "3105PATCH";
+"nova.files.tile.target" = "NOVA ONLY";
+"nova.files.tile.restore" = "RESTORABLE";
 "nova.files.sync" = "REFRESH";
 "nova.files.syncing" = "UPDATING…";
 "nova.files.last_sync" = "LAST UPDATED %@";

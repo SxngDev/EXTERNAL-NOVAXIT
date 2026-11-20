@@ -66,7 +66,10 @@
 "settings.open_support" = "Abrir soporte de Discord";
 "vesper.tab.more" = "MÁS";
 "nova.files.title" = "NOVA";
-"nova.files.subtitle" = "CONTENIDO NOVA";
+"nova.files.subtitle" = "GESTOR DE PAQUETES";
+"nova.files.tile.package" = "3105PATCH";
+"nova.files.tile.target" = "SOLO NOVA";
+"nova.files.tile.restore" = "RESTAURABLE";
 "nova.files.sync" = "ACTUALIZAR";
 "nova.files.syncing" = "ACTUALIZANDO…";
 "nova.files.last_sync" = "ÚLTIMA ACTUALIZACIÓN %@";

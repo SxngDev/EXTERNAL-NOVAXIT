@@ -819,85 +819,105 @@ struct NOVAReceivedDocumentsCard: View {
     @State private var pollingEnabled = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(LinearGradient(colors: [AppTheme.accent, AppTheme.secondaryAccent], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 26, weight: .black))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 62, height: 62)
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.24), lineWidth: 1))
-                .shadow(color: AppTheme.accent.opacity(0.32), radius: 10, x: 0, y: 4)
+        ZStack {
+            NOVAStormBackdrop()
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        NOVAChamferedShape(cut: 13)
+                            .fill(LinearGradient(colors: [NOVAControlPalette.red, NOVAControlPalette.deepRed], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .font(.system(size: 24, weight: .black))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 56, height: 56)
+                    .overlay(NOVAChamferedShape(cut: 13).stroke(.white.opacity(0.34), lineWidth: 1))
+                    .shadow(color: NOVAControlPalette.red.opacity(0.38), radius: 10, x: 0, y: 4)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(appLanguage.text("nova.files.title"))
-                        .font(.system(size: 21, weight: .black, design: .rounded))
-                        .foregroundStyle(AppTheme.paper)
-                    Text(appLanguage.text("nova.files.subtitle"))
-                        .font(.system(size: 8, weight: .black, design: .rounded))
-                        .tracking(1.1)
-                        .foregroundStyle(AppTheme.paper.opacity(0.55))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(appLanguage.text("nova.files.title"))
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .tracking(1.0)
+                            .foregroundStyle(.white)
+                        Text(appLanguage.text("nova.files.subtitle"))
+                            .font(.system(size: 8, weight: .black, design: .rounded))
+                            .tracking(1.25)
+                            .foregroundStyle(.white.opacity(0.58))
+                    }
+                    Spacer(minLength: 2)
+                    Button(action: syncNow) {
+                        Image(systemName: store.isSyncing ? "hourglass" : "arrow.clockwise")
+                            .font(.system(size: 15, weight: .black))
+                            .foregroundStyle(.white)
+                            .frame(width: 42, height: 42)
+                            .background(NOVAChamferedShape(cut: 10).fill(NOVAControlPalette.red))
+                            .overlay(NOVAChamferedShape(cut: 10).stroke(.white.opacity(0.25), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(appLanguage.text(store.isSyncing ? "nova.files.syncing" : "nova.files.sync")))
+                    .disabled(store.isSyncing || !licenseManager.isActive)
                 }
-                Spacer(minLength: 2)
-                Button(action: syncNow) {
-                    Image(systemName: store.isSyncing ? "hourglass" : "arrow.clockwise")
-                        .font(.system(size: 15, weight: .black))
-                        .foregroundStyle(AppTheme.ink)
-                        .frame(width: 42, height: 42)
-                        .background(AppTheme.accent, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text(appLanguage.text(store.isSyncing ? "nova.files.syncing" : "nova.files.sync")))
-                .disabled(store.isSyncing || !licenseManager.isActive)
-            }
 
-            if let lastSyncedAt = store.lastSyncedAt {
-                Text(appLanguage.text("nova.files.last_sync", lastSyncedAt.formatted(date: .abbreviated, time: .shortened)))
+                HStack(spacing: 7) {
+                    statusTile(icon: "shippingbox.fill", label: appLanguage.text("nova.files.tile.package"))
+                    statusTile(icon: "iphone", label: appLanguage.text("nova.files.tile.target"))
+                    statusTile(icon: "arrow.uturn.backward", label: appLanguage.text("nova.files.tile.restore"))
+                }
+
+                if let lastSyncedAt = store.lastSyncedAt {
+                    Text(appLanguage.text("nova.files.last_sync", lastSyncedAt.formatted(date: .abbreviated, time: .shortened)))
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+
+                if !licenseManager.isActive || store.requiresActivation {
+                    Label(appLanguage.text("nova.files.auth_required"), systemImage: "key.fill")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(NOVAControlPalette.red.opacity(0.94))
+                } else if store.hasError {
+                    Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(NOVAControlPalette.red.opacity(0.94))
+                }
+
+                if store.files.isEmpty && !store.isSyncing {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(appLanguage.text("nova.files.none"))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.82))
+                        Text(appLanguage.text("nova.files.none_detail"))
+                            .font(.system(size: 8, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.52))
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(NOVAControlPalette.black.opacity(0.64))
+                    .clipShape(NOVAChamferedShape(cut: 9))
+                }
+
+                ForEach(store.files) { file in
+                    documentRow(file)
+                }
+
+                Rectangle()
+                    .fill(LinearGradient(colors: [.clear, NOVAControlPalette.red.opacity(0.58), .clear], startPoint: .leading, endPoint: .trailing))
+                    .frame(height: 1)
+                    .padding(.top, 1)
+                Text(appLanguage.text("nova.files.apply_notice"))
                     .font(.system(size: 8, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppTheme.paper.opacity(0.52))
-            }
-
-            if !licenseManager.isActive || store.requiresActivation {
-                Label(appLanguage.text("nova.files.auth_required"), systemImage: "key.fill")
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(AppTheme.secondaryAccent)
-            } else if store.hasError {
-                Label(appLanguage.text("nova.files.sync_failed"), systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(AppTheme.secondaryAccent)
-            }
-
-            if store.files.isEmpty && !store.isSyncing {
-                Text(appLanguage.text("nova.files.none"))
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(AppTheme.paper.opacity(0.72))
-                Text(appLanguage.text("nova.files.none_detail"))
+                    .foregroundStyle(.white.opacity(0.54))
+                Text(appLanguage.text("nova.files.maintenance_note"))
                     .font(.system(size: 8, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppTheme.paper.opacity(0.52))
+                    .foregroundStyle(.white.opacity(0.46))
             }
-
-            ForEach(store.files) { file in
-                documentRow(file)
-                if file.id != store.files.last?.id {
-                    Divider().overlay(AppTheme.paper.opacity(0.1))
-                }
-            }
-
-            Text(appLanguage.text("nova.files.apply_notice"))
-                .font(.system(size: 8, weight: .medium, design: .rounded))
-                .foregroundStyle(AppTheme.paper.opacity(0.5))
-                .padding(.top, 2)
-            Text(appLanguage.text("nova.files.maintenance_note"))
-                .font(.system(size: 8, weight: .medium, design: .rounded))
-                .foregroundStyle(AppTheme.paper.opacity(0.5))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(AppTheme.referenceCard, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(AppTheme.secondaryAccent.opacity(0.25), lineWidth: 1))
+        .background(NOVAControlPalette.panel)
+        .clipShape(NOVAChamferedShape(cut: 18))
+        .overlay(NOVAChamferedShape(cut: 18).stroke(.white.opacity(0.20), lineWidth: 1))
+        .shadow(color: NOVAControlPalette.red.opacity(0.15), radius: 14, x: 0, y: 7)
         .onChange(of: shouldSyncOnReentry) { shouldSync in
             if shouldSync { syncNow() }
         }
@@ -928,6 +948,24 @@ struct NOVAReceivedDocumentsCard: View {
         }
     }
 
+    private func statusTile(icon: String, label: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .black))
+                .foregroundStyle(NOVAControlPalette.red)
+            Text(label)
+                .font(.system(size: 7, weight: .black, design: .rounded))
+                .tracking(0.5)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .foregroundStyle(.white.opacity(0.83))
+        }
+        .frame(maxWidth: .infinity, minHeight: 30)
+        .background(NOVAControlPalette.black.opacity(0.74))
+        .clipShape(NOVAChamferedShape(cut: 7))
+        .overlay(NOVAChamferedShape(cut: 7).stroke(.white.opacity(0.12), lineWidth: 1))
+    }
+
     private func documentRow(_ file: NOVAStoredDocument) -> some View {
         let isApplied = store.appliedDocumentIDs.contains(file.id)
         let isBusy = store.operatingDocumentIDs.contains(file.id)
@@ -937,27 +975,28 @@ struct NOVAReceivedDocumentsCard: View {
         return VStack(alignment: .leading, spacing: 8) {
             if file.isRecentlyUploaded {
                 HStack(spacing: 6) {
-                    Capsule().fill(Color.green).frame(width: 18, height: 3)
+                    Capsule().fill(NOVAControlPalette.red).frame(width: 18, height: 3)
                     Text(appLanguage.text("nova.files.recent"))
                         .font(.system(size: 8, weight: .black, design: .rounded))
                         .tracking(0.5)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(NOVAControlPalette.red)
                 }
             }
             HStack(spacing: 10) {
                 Image(systemName: "doc.fill")
-                    .foregroundStyle(AppTheme.accent)
+                    .foregroundStyle(NOVAControlPalette.red)
                     .frame(width: 34, height: 34)
-                    .background(AppTheme.ink, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(NOVAControlPalette.black)
+                    .clipShape(NOVAChamferedShape(cut: 8))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(file.filename)
                         .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(AppTheme.paper)
+                        .foregroundStyle(.white)
                         .lineLimit(2)
                         .textSelection(.enabled)
                     Text(ByteCountFormatter.string(fromByteCount: Int64(file.sizeBytes), countStyle: .file))
                         .font(.system(size: 8, weight: .medium, design: .rounded))
-                        .foregroundStyle(AppTheme.paper.opacity(0.52))
+                        .foregroundStyle(.white.opacity(0.52))
                 }
                 Spacer(minLength: 4)
                 Toggle(isOn: Binding(
@@ -975,23 +1014,86 @@ struct NOVAReceivedDocumentsCard: View {
                     Text(appLanguage.text("nova.files.toggle_hint"))
                 }
                 .labelsHidden()
-                .tint(AppTheme.accent)
+                .tint(NOVAControlPalette.red)
                 .accessibilityLabel(Text(appLanguage.text("nova.files.toggle_hint")))
                 .disabled(isBusy || needsRecovery || store.isSyncing || (!licenseManager.isActive && !isApplied))
             }
             let stateKey = statusKey ?? (needsRecovery ? "nova.files.recovery_required" : (isBusy ? "nova.files.processing" : (isApplied ? "nova.files.applied" : "nova.files.not_applied")))
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(needsRecovery || statusKey != nil || isApplied ? NOVAControlPalette.red : .white.opacity(0.35))
+                    .frame(width: 3, height: 10)
             Text(appLanguage.text(stateKey))
                 .font(.system(size: 7, weight: .bold, design: .rounded))
-                .foregroundStyle(needsRecovery || statusKey != nil ? AppTheme.secondaryAccent : (isApplied ? AppTheme.accent : AppTheme.paper.opacity(0.5)))
+                    .foregroundStyle(needsRecovery || statusKey != nil || isApplied ? NOVAControlPalette.red : .white.opacity(0.55))
+            }
         }
         .padding(10)
-        .background(AppTheme.ink.opacity(0.62), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppTheme.paper.opacity(isApplied ? 0.18 : 0.08), lineWidth: 1))
+        .background(NOVAControlPalette.black.opacity(0.82))
+        .clipShape(NOVAChamferedShape(cut: 10))
+        .overlay(NOVAChamferedShape(cut: 10).stroke(isApplied ? NOVAControlPalette.red.opacity(0.52) : .white.opacity(0.13), lineWidth: 1))
     }
 
     private func syncNow() {
         guard licenseManager.isActive else { return }
         pollingEnabled = true
         Task { await store.sync(sessionToken: licenseManager.clientSessionToken()) }
+    }
+}
+
+private enum NOVAControlPalette {
+    static let red = Color(red: 0.94, green: 0.12, blue: 0.20)
+    static let deepRed = Color(red: 0.36, green: 0.035, blue: 0.07)
+    static let black = Color(red: 0.025, green: 0.026, blue: 0.032)
+    static let panel = Color(red: 0.045, green: 0.043, blue: 0.052)
+}
+
+private struct NOVAChamferedShape: Shape {
+    var cut: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let corner = min(cut, min(rect.width / 5, rect.height / 3))
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX + corner, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX - corner, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + corner))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - corner))
+            path.addLine(to: CGPoint(x: rect.maxX - corner, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX + corner, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - corner))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + corner))
+            path.closeSubpath()
+        }
+    }
+}
+
+private struct NOVAStormBackdrop: View {
+    private let bolts: [[CGPoint]] = [
+        [CGPoint(x: 0.06, y: 0.02), CGPoint(x: 0.13, y: 0.13), CGPoint(x: 0.10, y: 0.20), CGPoint(x: 0.21, y: 0.31)],
+        [CGPoint(x: 0.70, y: 0.00), CGPoint(x: 0.64, y: 0.12), CGPoint(x: 0.72, y: 0.19), CGPoint(x: 0.60, y: 0.30)],
+        [CGPoint(x: 0.94, y: 0.34), CGPoint(x: 0.86, y: 0.45), CGPoint(x: 0.92, y: 0.52), CGPoint(x: 0.82, y: 0.62)],
+        [CGPoint(x: 0.20, y: 0.72), CGPoint(x: 0.27, y: 0.80), CGPoint(x: 0.19, y: 0.87), CGPoint(x: 0.29, y: 0.98)]
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                RadialGradient(colors: [NOVAControlPalette.red.opacity(0.13), .clear], center: .topTrailing, startRadius: 4, endRadius: 230)
+                Canvas { context, size in
+                    for bolt in bolts {
+                        let path = Path { line in
+                            guard let first = bolt.first else { return }
+                            line.move(to: CGPoint(x: size.width * first.x, y: size.height * first.y))
+                            for point in bolt.dropFirst() {
+                                line.addLine(to: CGPoint(x: size.width * point.x, y: size.height * point.y))
+                            }
+                        }
+                        context.stroke(path, with: .color(.white.opacity(0.075)), lineWidth: 1)
+                    }
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .allowsHitTesting(false)
     }
 }
